@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Test File Upload</title>
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    .container {
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      padding: 20px;
+      margin-top: 20px;
+    }
+    h1 {
+      color: #333;
+    }
+    .form-group {
+      margin-bottom: 15px;
+    }
+    label {
+      display: block;
+      margin-bottom: 5px;
+      font-weight: 500;
+    }
+    input[type="text"], input[type="file"] {
+      width: 100%;
+      padding: 8px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+    }
+    button {
+      background-color: #4f46e5;
+      color: white;
+      border: none;
+      padding: 10px 15px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    button:hover {
+      background-color: #4338ca;
+    }
+    .result {
+      margin-top: 20px;
+      padding: 15px;
+      border-radius: 4px;
+    }
+    .success {
+      background-color: #d1fae5;
+      color: #065f46;
+    }
+    .error {
+      background-color: #fee2e2;
+      color: #b91c1c;
+    }
+    .buckets {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 15px;
+    }
+    .bucket-option {
+      border: 1px solid #ddd;
+      padding: 10px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .bucket-option.selected {
+      border-color: #4f46e5;
+      background-color: #eff6ff;
+    }
+  </style>
+</head>
+<body>
+  <h1>Test File Upload to Supabase Storage</h1>
+  
+  <div class="container">
+    <div class="form-group">
+      <label for="supabaseUrl">Supabase URL:</label>
+      <input type="text" id="supabaseUrl" placeholder="https://your-project.supabase.co">
+    </div>
+    
+    <div class="form-group">
+      <label for="supabaseKey">Supabase Anon Key:</label>
+      <input type="text" id="supabaseKey" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...">
+    </div>
+    
+    <div class="form-group">
+      <label>Select Bucket:</label>
+      <div class="buckets">
+        <div class="bucket-option selected" data-bucket="homework-submissions">homework-submissions</div>
+        <div class="bucket-option" data-bucket="homeworksubmissions1">homeworksubmissions1</div>
+        <div class="bucket-option" data-bucket="homework_submissions">homework_submissions</div>
+      </div>
+    </div>
+    
+    <div class="form-group">
+      <label for="fileUpload">Select File:</label>
+      <input type="file" id="fileUpload">
+    </div>
+    
+    <button id="uploadBtn">Upload File</button>
+    <button id="listBucketsBtn">List Buckets</button>
+    
+    <div id="result" class="result" style="display: none;"></div>
+  </div>
+  
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      // Bucket selection
+      const bucketOptions = document.querySelectorAll('.bucket-option');
+      let selectedBucket = 'homework-submissions';
+      
+      bucketOptions.forEach(option => {
+        option.addEventListener('click', function() {
+          bucketOptions.forEach(opt => opt.classList.remove('selected'));
+          this.classList.add('selected');
+          selectedBucket = this.dataset.bucket;
+        });
+      });
+      
+      // Upload button
+      document.getElementById('uploadBtn').addEventListener('click', async function() {
+        const supabaseUrl = document.getElementById('supabaseUrl').value;
+        const supabaseKey = document.getElementById('supabaseKey').value;
+        const fileInput = document.getElementById('fileUpload');
+        const resultDiv = document.getElementById('result');
+        
+        if (!supabaseUrl || !supabaseKey) {
+          showResult('Please enter Supabase URL and Anon Key', 'error');
+          return;
+        }
+        
+        if (!fileInput.files || fileInput.files.length === 0) {
+          showResult('Please select a file to upload', 'error');
+          return;
+        }
+        
+        const file = fileInput.files[0];
+        
+        try {
+          // Initialize Supabase client
+          const { createClient } = window.supabase;
+          const supabaseClient = createClient(supabaseUrl, supabaseKey);
+          
+          // Generate a unique file name
+          const fileExt = file.name.split('.').pop();
+          const fileName = `test-${Date.now()}.${fileExt}`;
+          
+          // Upload file
+          const { data, error } = await supabaseClient.storage
+            .from(selectedBucket)
+            .upload(fileName, file);
+          
+          if (error) {
+            showResult(`Upload error: ${error.message}`, 'error');
+          } else {
+            // Get public URL
+            const { data: urlData } = supabaseClient.storage
+              .from(selectedBucket)
+              .getPublicUrl(fileName);
+            
+            showResult(`File uploaded successfully! URL: ${urlData.publicUrl}`, 'success');
+          }
+        } catch (error) {
+          showResult(`Error: ${error.message}`, 'error');
+        }
+      });
+      
+      // List buckets button
+      document.getElementById('listBucketsBtn').addEventListener('click', async function() {
+        const supabaseUrl = document.getElementById('supabaseUrl').value;
+        const supabaseKey = document.getElementById('supabaseKey').value;
+        
+        if (!supabaseUrl || !supabaseKey) {
+          showResult('Please enter Supabase URL and Anon Key', 'error');
+          return;
+        }
+        
+        try {
+          // Initialize Supabase client
+          const { createClient } = window.supabase;
+          const supabaseClient = createClient(supabaseUrl, supabaseKey);
+          
+          // List buckets
+          const { data, error } = await supabaseClient.storage.listBuckets();
+          
+          if (error) {
+            showResult(`Error listing buckets: ${error.message}`, 'error');
+          } else {
+            const bucketNames = data.map(bucket => bucket.name).join(', ');
+            showResult(`Available buckets: ${bucketNames}`, 'success');
+          }
+        } catch (error) {
+          showResult(`Error: ${error.message}`, 'error');
+        }
+      });
+      
+      function showResult(message, type) {
+        const resultDiv = document.getElementById('result');
+        resultDiv.textContent = message;
+        resultDiv.className = `result ${type}`;
+        resultDiv.style.display = 'block';
+      }
+    });
+  </script>
+</body>
+</html>

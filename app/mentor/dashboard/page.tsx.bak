@@ -1,0 +1,858 @@
+"use client"
+
+import { useState, useEffect } from "react"
+import { useRouter } from "next/navigation"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Progress } from "@/components/ui/progress"
+import { Users, BookOpen, Calendar, Clock, CheckCircle, AlertCircle, User, Video, Target, TrendingUp, Lightbulb } from "lucide-react"
+import Link from "next/link"
+import { supabase } from "@/lib/supabase/client"
+import { useAuth } from "@/contexts/auth-context"
+import { LoadingSpinner } from "@/components/ui/loading-spinner"
+import { DashboardSkeleton } from "@/components/ui/dashboard-skeleton"
+import { UpcomingSessionsCard } from "@/components/ui/upcoming-sessions-card"
+import { MentorStudents } from "@/components/dashboard/mentor-students"
+import { motion } from "framer-motion"
+import { ProgressiveLoading, ProgressiveLoadingContainer } from "@/components/ui/progressive-loading"
+
+interface MentorStats {
+  totalStudents: number
+  activeStudents: number
+  pendingHomework: number
+  sessionsToday: number
+  upcomingSessions: number
+  completedThisWeek: number
+}
+
+interface Activity {
+  id: string
+  type: "homework" | "session"
+  student: string
+  subject: string
+  action: string
+  time: string
+}
+
+interface SessionItem {
+  id: string
+  student: string
+  subject: string
+  time: string
+  status: string
+}
+
+export default function MentorDashboard() {
+  const { user, profile, loading: authLoading } = useAuth()
+  const router = useRouter()
+  const [stats, setStats] = useState<MentorStats>({
+    totalStudents: 0,
+    activeStudents: 0,
+    pendingHomework: 0,
+    sessionsToday: 0,
+    upcomingSessions: 0,
+    completedThisWeek: 0,
+  })
+
+  const [recentActivity, setRecentActivity] = useState<Activity[]>([])
+  const [todaysSessions, setTodaysSessions] = useState<SessionItem[]>([])
+  const [upcomingSessions, setUpcomingSessions] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [mounted, setMounted] = useState(false)
+  
+  // Track loading state for each section
+  const [sectionLoading, setSectionLoading] = useState({
+    stats: true,
+    sessions: true,
+    activity: true
+  })
+
+  // Make sure we're on the client side
+  useEffect(() => {
+    setMounted(true)
+  }, [])
+
+  // Check if user is authorized to view this page
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    
+    if (authLoading || !mounted || sessionStorage.getItem('auth_redirecting')) {
+      return;
+    }
+    
+    const authAttemptTime = localStorage.getItem('authAttemptTime');
+    const now = Date.now();
+    
+    if (authAttemptTime && (now - parseInt(authAttemptTime)) < 10000) {
+      console.log("Recent auth attempt, waiting for auth state to settle");
+      return;
+    }
+    
+    const recentlyVerified = sessionStorage.getItem('recently_verified');
+    
+    if (!user) {
+      console.log("No user found, redirecting to login");
+      sessionStorage.setItem('auth_redirecting', 'true');
+      router.push('/auth/login');
+      return;
+    }
+
+    if (profile && profile.role !== 'mentor') {
+      console.log("User is not a mentor, redirecting");
+      sessionStorage.setItem('auth_redirecting', 'true');
+      router.push('/student/dashboard');
+      return;
+    }
+
+    // Clear any redirect flags
+    sessionStorage.removeItem('auth_redirecting');
+  }, [user, profile, authLoading, mounted, router])
+
+  // Fetch mentor dashboard data
+  useEffect(() => {
+    if (!user || !profile || profile.role !== 'mentor') return;
+
+    async function fetchDashboardData() {
+      try {
+        setLoading(true);
+        
+        // Set up progressive loading
+        setSectionLoading({
+          stats: true,
+          sessions: true,
+          activity: true
+        });
+        
+        // Fetch mentor's students from assigned_students
+         let allStudents = [];
+        let totalStudentsCount = 0;
+        
+        try {
+          const { data: assignedStudents, error: studentsError } = await supabase
+              .from('assigned_students')
+              .select(`
+                student_id,
+                profiles!assassigned_students_student_id_fkeyd_students_student_id_fkey(full_name, email)
+              `)
+              .eq('mentor_id', user.id);
+              
+          if (studentsError) {
+              console.error('Error fetching students from assigned_students:', {
+                message: studentsError.message,
+                details: studentsError.details,
+                hint: studentsError.hint,
+                code: studentsError.code
+              });
+              // Set error state but don't throw - let the dashboard load with empty data
+              setError(`Failed to load students: ${studentsError.message}`);
+          } else {
+              allStudents = assignedStudents || [];
+              totalStudentsCount = allStudents.length;
+              console.log(`Found ${totalStudentsCount} assigned students`);
+          }
+        } catch (fetchError) {
+          console.error('Exception fetching assigned students:', fetchError);
+          setError('Failed to load students data');
+        }
+        
+        // Verify count from database
+        try {
+          const { count: dbCount, error: countError } = await supabase
+            .from('assigned_students')
+            .select('student_id', { count: 'exact', head: true })
+            .eq('mentor_id', user.id);
+            
+          if (countError) {
+            console.error('Error getting student count:', {
+              message: countError.message,
+              details: countError.details,
+              hint: countError.hint,
+              code: countError.code
+            });
+          } else {
+            const dbTotalCount = dbCount || 0;
+            console.log(`Database count of assigned students: ${dbTotalCount}`);
+            
+            // Use the database count if it's higher (more reliable)
+            if (dbTotalCount > totalStudentsCount) {
+              totalStudentsCount = dbTotalCount;
+            }
+          }
+        } catch (countError) {
+          console.error('Exception getting student count:', countError);
+        }
+
+        // Fetch pending homework for mentor's students
+        const studentIds = allStudents.map(s => s.student_id) || []
+        let pendingHomeworkCount = 0
+        
+        if (studentIds.length > 0) {
+          try {
+            const { data: homework, error: homeworkError } = await supabase
+              .from('homework')
+              .select('id')
+              .in('student_id', studentIds)
+              .eq('status', 'pending')
+
+            if (!homeworkError) {
+              pendingHomeworkCount = homework?.length || 0
+            } else {
+              console.error('Error fetching homework:', homeworkError)
+            }
+          } catch (homeworkFetchError) {
+            console.error('Exception fetching homework:', homeworkFetchError)
+          }
+        }
+
+        // Fetch today's sessions
+        const today = new Date().toISOString().split('T')[0]
+        let sessions = []
+        
+        try {
+          const { data: sessionsData, error: sessionsError } = await supabase
+            .from('sessions')
+            .select('*')
+            .eq('mentor_id', user.id)
+            .gte('scheduled_at', today)
+            .lt('scheduled_at', today + 'T23:59:59')
+            
+          if (sessionsError) {
+            console.error('Error fetching today\'s sessions:', sessionsError)
+          } else {
+            sessions = sessionsData || []
+          }
+        } catch (sessionsFetchError) {
+          console.error('Exception fetching today\'s sessions:', sessionsFetchError);
+          // Don't set error state for sessions - let dashboard load with empty sessions
+        }
+
+        // Fetch upcoming sessions (next 7 days)
+        const nextWeek = new Date()
+        nextWeek.setDate(nextWeek.getDate() + 7)
+        
+        let upcomingSessionsData = []
+        
+        try {
+          const { data: upcomingSessions, error: upcomingError } = await supabase
+            .from('sessions')
+            .select(`
+              *,
+              profiles!inner(full_name)
+            `)
+            .eq('mentor_id', user.id)
+            .gte('scheduled_at', new Date().toISOString())
+            .lte('scheduled_at', nextWeek.toISOString())
+            .order('scheduled_at', { ascending: true })
+            
+          if (upcomingError) {
+            console.error('Error fetching upcoming sessions:', {
+              message: upcomingError.message,
+              details: upcomingError.details,
+              hint: upcomingError.hint,
+              code: upcomingError.code
+            })
+            // Don't set error state for sessions - let dashboard load with empty sessions
+          } else {
+            upcomingSessionsData = upcomingSessions || []
+          }
+        } catch (upcomingFetchError) {
+          console.error('Exception fetching upcoming sessions:', upcomingFetchError)
+        }
+        
+        // Get completed sessions this week
+        let completedThisWeek = 0
+        try {
+          const startOfWeek = new Date()
+          startOfWeek.setDate(startOfWeek.getDate() - startOfWeek.getDay()) // Start of current week (Sunday)
+          startOfWeek.setHours(0, 0, 0, 0)
+          
+          const { count, error: completedError } = await supabase
+            .from('sessions')
+            .select('id', { count: 'exact', head: true })
+            .eq('mentor_id', user.id)
+            .eq('status', 'completed')
+            .gte('scheduled_at', startOfWeek.toISOString())
+            
+          if (!completedError) {
+            completedThisWeek = count || 0
+          } else {
+            console.error('Error fetching completed sessions:', completedError)
+          }
+        } catch (completedFetchError) {
+          console.error('Exception fetching completed sessions:', completedFetchError)
+        }
+
+        setStats({
+          totalStudents: totalStudentsCount || 0,
+          activeStudents: allStudents?.length || 0,
+          pendingHomework: pendingHomeworkCount,
+          sessionsToday: sessions?.length || 0,
+          upcomingSessions: upcomingSessionsData?.length || 0,
+          completedThisWeek: completedThisWeek
+        })
+        
+        // Mark stats as loaded - this will allow the UI to start rendering
+        setSectionLoading(prev => ({
+          ...prev,
+          stats: false
+        }));
+        
+        // Consider the dashboard partially loaded once stats are available
+        setLoading(false);
+
+        setUpcomingSessions(upcomingSessionsData || []);
+        
+        // Fetch real recent activity
+        let homeworkData = [];
+        let sessionsData = [];
+        
+        try {
+          // Get recent homework submissions
+          const { data: homework, error: homeworkError } = await supabase
+            .from('homework')
+            .select(`
+              id,
+              student_id,
+              subject,
+              created_at,
+              profiles!inner(full_name)
+            `)
+            .eq('mentor_id', user.id)
+            .order('created_at', { ascending: false })
+            .limit(5)
+            
+          if (homeworkError) {
+            console.error('Error fetching recent homework:', {
+              message: homeworkError.message,
+              details: homeworkError.details,
+              hint: homeworkError.hint,
+              code: homeworkError.code
+            })
+          } else {
+            homeworkData = homework || [];
+          }
+        } catch (homeworkFetchError) {
+          console.error('Exception fetching recent homework:', homeworkFetchError);
+        }
+        
+        try {
+          // Get recent sessions
+          const { data: sessions, error: sessionsError } = await supabase
+            .from('sessions')
+            .select(`
+              id,
+              student_id,
+              subject,
+              scheduled_at,
+              status,
+              profiles!inner(full_name)
+            `)
+            .eq('mentor_id', user.id)
+            .order('scheduled_at', { ascending: false })
+            .limit(5)
+            
+          if (sessionsError) {
+            console.error('Error fetching recent sessions:', {
+              message: sessionsError.message,
+              details: sessionsError.details,
+              hint: sessionsError.hint,
+              code: sessionsError.code
+            })
+          } else {
+            sessionsData = sessions || [];
+          }
+        } catch (sessionsFetchError) {
+          console.error('Exception fetching recent sessions:', sessionsFetchError);
+        }
+          
+          // Combine and format the activity data
+          const recentActivityData = []
+          
+          // Add homework activities
+          if (homeworkData && homeworkData.length > 0) {
+            homeworkData.forEach(hw => {
+              const timeDiff = new Date().getTime() - new Date(hw.created_at).getTime()
+              const hoursAgo = Math.floor(timeDiff / (1000 * 60 * 60))
+              const daysAgo = Math.floor(hoursAgo / 24)
+              
+              let timeText = 'just now'
+              if (hoursAgo > 0 && hoursAgo < 24) {
+                timeText = `${hoursAgo} hour${hoursAgo > 1 ? 's' : ''} ago`
+              } else if (daysAgo > 0) {
+                timeText = `${daysAgo} day${daysAgo > 1 ? 's' : ''} ago`
+              }
+              
+              recentActivityData.push({
+                id: `hw-${hw.id}`,
+                type: 'homework',
+                student: hw.profiles.full_name,
+                subject: hw.subject,
+                action: 'submitted homework',
+                time: timeText
+              })
+            })
+          }
+          
+          // Add session activities
+          if (sessionsData && sessionsData.length > 0) {
+            sessionsData.forEach(session => {
+              const sessionDate = new Date(session.scheduled_at)
+              const now = new Date()
+              let action = 'scheduled session'
+              let timeText = ''
+              
+              if (sessionDate < now && session.status === 'completed') {
+                action = 'completed session'
+                const timeDiff = now.getTime() - sessionDate.getTime()
+                const hoursAgo = Math.floor(timeDiff / (1000 * 60 * 60))
+                const daysAgo = Math.floor(hoursAgo / 24)
+                
+                if (hoursAgo < 24) {
+                  timeText = `${hoursAgo} hour${hoursAgo > 1 ? 's' : ''} ago`
+                } else {
+                  timeText = `${daysAgo} day${daysAgo > 1 ? 's' : ''} ago`
+                }
+              } else {
+                const timeDiff = sessionDate.getTime() - now.getTime()
+                const hoursLater = Math.floor(timeDiff / (1000 * 60 * 60))
+                const daysLater = Math.floor(hoursLater / 24)
+                
+                if (sessionDate.toDateString() === now.toDateString()) {
+                  timeText = `today at ${sessionDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+                } else if (daysLater < 1) {
+                  timeText = `tomorrow at ${sessionDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+                } else {
+                  timeText = `in ${daysLater} days`
+                }
+              }
+              
+              recentActivityData.push({
+                id: `session-${session.id}`,
+                type: 'session',
+                student: session.profiles.full_name,
+                subject: session.subject || 'General tutoring',
+                action: action,
+                time: timeText
+              })
+            })
+          }
+          
+          // Sort by most recent first (this is a simple approach - you might want to improve it)
+          recentActivityData.sort((a, b) => {
+            if (a.time.includes('just now')) return -1
+            if (b.time.includes('just now')) return 1
+            
+            const aHours = parseInt(a.time.split(' ')[0]) || 0
+            const bHours = parseInt(b.time.split(' ')[0]) || 0
+            
+            if (a.time.includes('hour') && b.time.includes('hour')) {
+              return aHours - bHours
+            }
+            
+            if (a.time.includes('day') && b.time.includes('day')) {
+              return aHours - bHours
+            }
+            
+            if (a.time.includes('hour') && b.time.includes('day')) {
+              return -1
+            }
+            
+            if (a.time.includes('day') && b.time.includes('hour')) {
+              return 1
+            }
+            
+            return 0
+          })
+          
+          // Take the most recent 5 activities
+          setRecentActivity(recentActivityData.slice(0, 5));
+        } catch (activityError) {
+          console.error('Error processing activity data:', activityError);
+          // Fallback to empty activity list
+          setRecentActivity([]);
+        }
+
+      } catch (error) {
+        console.error('Error fetching dashboard data:', error);
+        setError('Failed to load dashboard data. Please try again later.');
+      } finally {
+        // Mark all sections as loaded
+        setSectionLoading({
+          stats: false,
+          sessions: false,
+          activity: false
+        });
+      }
+    }
+
+    fetchDashboardData();
+  }, [user, profile])
+
+  if (!mounted) {
+    return null
+  }
+
+  if (authLoading || loading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-[#0C0E19] via-[#111420] to-[#0C0E19] flex items-center justify-center">
+        <div className="text-center">
+          <div className="relative h-16 w-16 mx-auto mb-4">
+            <div className="absolute inset-0 rounded-full border-4 border-yellow-400/20"></div>
+            <div className="absolute inset-0 rounded-full border-t-4 border-yellow-400 animate-spin"></div>
+          </div>
+          <p className="text-gray-400 text-lg">Loading your StudyHike mentor dashboard...</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-[#0C0E19] via-[#111420] to-[#0C0E19] flex items-center justify-center">
+        <div className="text-center">
+          <div className="bg-[#1A1D2C] p-8 rounded-lg border border-yellow-400/30">
+            <AlertCircle className="h-16 w-16 text-yellow-400 mx-auto mb-4" />
+            <p className="text-yellow-400 text-lg mb-4">{error}</p>
+            <Button onClick={() => window.location.reload()} className="mt-4 bg-yellow-400 text-[#0C0E19] hover:bg-yellow-300">
+              Retry
+            </Button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-[#0C0E19] via-[#111420] to-[#0C0E19] text-white">
+      <div className="p-6 space-y-8">
+        <ProgressiveLoadingContainer>
+          {/* Header */}
+          <div className="mb-8">
+            <div className="flex items-center space-x-3 mb-4">
+              <div className="bg-yellow-400 p-2 rounded-lg">
+                <span role="img" aria-label="bulb" className="text-xl">💡</span>
+              </div>
+              <div>
+                <h1 className="text-3xl font-bold text-white">Mentor Dashboard</h1>
+                <p className="text-gray-400 text-lg">Welcome back, {profile?.full_name || 'Mentor'}!</p>
+              </div>
+            </div>
+            <p className="text-gray-300 text-lg">Guiding students through their StudyHike journey</p>
+          </div>
+
+          {/* Quick Actions */}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+            <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
+              <Link href="/mentor/students">
+                <Card className="bg-gradient-to-br from-[#1A1D2C]/80 to-[#1A1D2C]/60 border border-yellow-400/30 hover:border-yellow-400/50 transition-all h-full">
+                  <CardContent className="p-6 flex flex-col items-center justify-center text-center h-full">
+                    <Users className="h-10 w-10 text-yellow-400 mb-4" />
+                    <h3 className="text-lg font-medium text-white">My Students</h3>
+                    <p className="text-gray-400 text-sm mt-2">View and manage your assigned students</p>
+                  </CardContent>
+                </Card>
+              </Link>
+            </motion.div>
+
+            <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
+              <Link href="/mentor/sessions">
+                <Card className="bg-gradient-to-br from-[#1A1D2C]/80 to-[#1A1D2C]/60 border border-yellow-400/30 hover:border-yellow-400/50 transition-all h-full">
+                  <CardContent className="p-6 flex flex-col items-center justify-center text-center h-full">
+                    <Video className="h-10 w-10 text-yellow-400 mb-4" />
+                    <h3 className="text-lg font-medium text-white">Sessions</h3>
+                    <p className="text-gray-400 text-sm mt-2">Schedule and manage tutoring sessions</p>
+                  </CardContent>
+                </Card>
+              </Link>
+            </motion.div>
+
+            <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
+              <Link href="/mentor/homework">
+                <Card className="bg-gradient-to-br from-[#1A1D2C]/80 to-[#1A1D2C]/60 border border-yellow-400/30 hover:border-yellow-400/50 transition-all h-full">
+                  <CardContent className="p-6 flex flex-col items-center justify-center text-center h-full">
+                    <BookOpen className="h-10 w-10 text-yellow-400 mb-4" />
+                    <h3 className="text-lg font-medium text-white">Homework</h3>
+                    <p className="text-gray-400 text-sm mt-2">Review and grade student assignments</p>
+                  </CardContent>
+                </Card>
+              </Link>
+            </motion.div>
+
+            <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
+              <Link href="/mentor/calendar">
+                <Card className="bg-gradient-to-br from-[#1A1D2C]/80 to-[#1A1D2C]/60 border border-yellow-400/30 hover:border-yellow-400/50 transition-all h-full">
+                  <CardContent className="p-6 flex flex-col items-center justify-center text-center h-full">
+                    <Calendar className="h-10 w-10 text-yellow-400 mb-4" />
+                    <h3 className="text-lg font-medium text-white">Calendar</h3>
+                    <p className="text-gray-400 text-sm mt-2">View your schedule and availability</p>
+                  </CardContent>
+                </Card>
+              </Link>
+            </motion.div>
+          </div>
+
+          {/* Stats Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.5 }}
+            >
+              <Card className="bg-gradient-to-br from-[#1A1D2C]/80 to-[#1A1D2C]/60 border border-yellow-400/30 hover:border-yellow-400/50 transition-all">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-lg text-yellow-400">Students</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <p className="text-3xl font-bold text-white">{stats.totalStudents}</p>
+                      <p className="text-sm text-gray-400">Total assigned</p>
+                    </div>
+                    <Users className="h-12 w-12 text-yellow-400/30" />
+                  </div>
+                  <div className="mt-4">
+                    <div className="flex justify-between text-sm mb-1">
+                      <span className="text-gray-400">Active</span>
+                      <span className="text-white">{stats.activeStudents}</span>
+                    </div>
+                    <Progress value={(stats.activeStudents / Math.max(stats.totalStudents, 1)) * 100} className="h-1" />
+                  </div>
+                </CardContent>
+              </Card>
+            </motion.div>
+
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.5, delay: 0.1 }}
+            >
+              <Card className="bg-gradient-to-br from-[#1A1D2C]/80 to-[#1A1D2C]/60 border border-yellow-400/30 hover:border-yellow-400/50 transition-all">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-lg text-yellow-400">Today's Schedule</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <p className="text-3xl font-bold text-white">{stats.sessionsToday}</p>
+                      <p className="text-sm text-gray-400">Sessions today</p>
+                    </div>
+                    <Clock className="h-12 w-12 text-yellow-400/30" />
+                  </div>
+                  <div className="mt-4">
+                    <div className="flex justify-between text-sm mb-1">
+                      <span className="text-gray-400">Upcoming</span>
+                      <span className="text-white">{stats.upcomingSessions}</span>
+                    </div>
+                    <Progress value={Math.min(stats.upcomingSessions * 10, 100)} className="h-1" />
+                  </div>
+                </CardContent>
+              </Card>
+            </motion.div>
+
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.5, delay: 0.2 }}
+            >
+              <Card className="bg-gradient-to-br from-[#1A1D2C]/80 to-[#1A1D2C]/60 border border-yellow-400/30 hover:border-yellow-400/50 transition-all">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-lg text-yellow-400">Homework</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <p className="text-3xl font-bold text-white">{stats.pendingHomework}</p>
+                      <p className="text-sm text-gray-400">Pending review</p>
+                    </div>
+                    <BookOpen className="h-12 w-12 text-yellow-400/30" />
+                  </div>
+                  <div className="mt-4">
+                    <div className="flex justify-between text-sm mb-1">
+                      <span className="text-gray-400">Completion rate</span>
+                      <span className="text-white">78%</span>
+                    </div>
+                    <Progress value={78} className="h-1" />
+                  </div>
+                </CardContent>
+              </Card>
+            </motion.div>
+          </div>
+
+          {/* Main Content Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {/* Upcoming Sessions */}
+            <motion.div
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ duration: 0.6, delay: 0.5 }}
+              className="md:col-span-2"
+            >
+              <Card className="bg-gradient-to-br from-[#1A1D2C]/80 to-[#1A1D2C]/60 border border-yellow-400/30 hover:border-yellow-400/50 transition-all">
+                <CardHeader>
+                  <CardTitle className="flex items-center text-xl font-bold text-yellow-400">
+                    <Calendar className="mr-3 h-6 w-6" />
+                    Upcoming Sessions
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {upcomingSessions.length > 0 ? (
+                    <div className="space-y-3">
+                      {upcomingSessions.slice(0, 3).map((session) => (
+                        <div key={session.id} className="flex items-start space-x-3 p-3 bg-[#232738]/70 rounded-lg border border-yellow-400/10">
+                          <div className="p-2 rounded-full bg-yellow-400/20">
+                            <User className="h-4 w-4 text-yellow-400" />
+                          </div>
+                          <div className="flex-1">
+                            <p className="text-white font-medium">{session.profiles?.full_name || 'Student'}</p>
+                            <p className="text-sm text-gray-400">{session.subject || 'General tutoring'}</p>
+                            <p className="text-xs text-gray-500">
+                              {new Date(session.scheduled_at).toLocaleDateString()} at {new Date(session.scheduled_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </p>
+                          </div>
+                          <Badge className="bg-yellow-400/20 text-yellow-400 border-yellow-400/30">
+                            {session.status || 'Scheduled'}
+                          </Badge>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-center py-8">
+                      <Calendar className="h-12 w-12 text-yellow-400 mx-auto mb-3 opacity-50" />
+                      <p className="text-gray-400">No upcoming sessions</p>
+                      <Button variant="outline" className="mt-4 border-yellow-400/30 text-yellow-400 hover:bg-yellow-400/10">
+                        Schedule a Session
+                      </Button>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </motion.div>
+
+            {/* Recent Activity */}
+            <motion.div
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ duration: 0.6, delay: 0.7 }}
+            >
+              <Card className="bg-gradient-to-br from-[#1A1D2C]/80 to-[#1A1D2C]/60 border border-yellow-400/30 hover:border-yellow-400/50 transition-all">
+                <CardHeader>
+                  <CardTitle className="flex items-center text-xl font-bold text-yellow-400">
+                    <TrendingUp className="mr-3 h-6 w-6" />
+                    Recent Activity
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {recentActivity.length > 0 ? (
+                    <div className="space-y-3">
+                      {recentActivity.map((activity, index) => (
+                        <div key={activity.id} className="flex items-start space-x-3 p-3 bg-[#232738]/70 rounded-lg border border-yellow-400/10">
+                          <div className={`p-2 rounded-full bg-yellow-400/20`}>
+                            {activity.type === 'homework' ? 
+                              <BookOpen className="h-4 w-4 text-yellow-400" /> : 
+                              <Video className="h-4 w-4 text-yellow-400" />
+                            }
+                          </div>
+                          <div className="flex-1">
+                            <p className="text-white font-medium">{activity.student}</p>
+                            <p className="text-sm text-gray-400">{activity.action} in {activity.subject}</p>
+                            <p className="text-xs text-gray-500">{activity.time}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-center py-8">
+                      <TrendingUp className="h-12 w-12 text-yellow-400 mx-auto mb-3 opacity-50" />
+                      <p className="text-gray-400">No recent activity</p>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </motion.div>
+
+            {/* Mentor Tips */}
+            <motion.div
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ duration: 0.6, delay: 0.8 }}
+            >
+              <Card className="bg-gradient-to-br from-[#1A1D2C]/80 to-[#1A1D2C]/60 border border-yellow-400/30 hover:border-yellow-400/50 transition-all">
+                <CardHeader>
+                  <CardTitle className="flex items-center text-xl font-bold text-yellow-400">
+                    <Lightbulb className="mr-3 h-6 w-6" />
+                    Mentor Tips
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-4">
+                    <div className="p-3 bg-[#232738]/70 rounded-lg border border-yellow-400/10">
+                      <h4 className="font-medium text-white mb-2">📚 Effective Study Planning</h4>
+                      <p className="text-sm text-gray-400">Help students break down complex topics into manageable daily tasks.</p>
+                    </div>
+                    <div className="p-3 bg-[#232738]/70 rounded-lg border border-yellow-400/10">
+                      <h4 className="font-medium text-white mb-2">🎯 Goal Setting</h4>
+                      <p className="text-sm text-gray-400">Set realistic short-term goals to maintain motivation and track progress.</p>
+                    </div>
+                    <div className="p-3 bg-[#232738]/70 rounded-lg border border-yellow-400/10">
+                      <h4 className="font-medium text-white mb-2">💬 Regular Check-ins</h4>
+                      <p className="text-sm text-gray-400">Schedule weekly progress reviews to address challenges early.</p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </motion.div>
+
+            {/* Quick Stats */}
+            <motion.div
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ duration: 0.6, delay: 0.9 }}
+            >
+              <Card className="bg-gradient-to-br from-[#1A1D2C]/80 to-[#1A1D2C]/60 border border-yellow-400/30 hover:border-yellow-400/50 transition-all">
+                <CardHeader>
+                  <CardTitle className="flex items-center text-xl font-bold text-yellow-400">
+                    <Target className="mr-3 h-6 w-6" />
+                    This Week's Impact
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-300">Sessions Completed</span>
+                      <span className="text-white font-bold text-lg">{stats.completedThisWeek}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-300">Homework Reviewed</span>
+                      <span className="text-white font-bold text-lg">{stats.pendingHomework}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-300">Student Progress</span>
+                      <span className="text-white font-bold text-lg">
+                        {stats.activeStudents > 0 ? Math.round((stats.activeStudents / Math.max(stats.totalStudents, 1)) * 100) : 0}%
+                      </span>
+                    </div>
+                    <div className="h-2 w-full bg-[#232738] rounded-full overflow-hidden">
+                      <div 
+                        className="h-full bg-yellow-400 rounded-full" 
+                        style={{ 
+                          width: `${stats.activeStudents > 0 ? Math.round((stats.activeStudents / Math.max(stats.totalStudents, 1)) * 100) : 0}%` 
+                        }}
+                      ></div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </motion.div>
+          </div>
+
+          {/* Students Overview */}
+          <div>
+            <MentorStudents />
+          </div>
+        </ProgressiveLoadingContainer>
+      </div>
+    </div>
+  )
+}

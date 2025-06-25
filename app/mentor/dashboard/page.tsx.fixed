@@ -1,0 +1,642 @@
+"use client"
+
+import { useState, useEffect } from "react"
+import { useRouter } from "next/navigation"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Progress } from "@/components/ui/progress"
+import { Users, BookOpen, Calendar, Clock, CheckCircle, AlertCircle, User, Video, Target, TrendingUp, Lightbulb } from "lucide-react"
+import Link from "next/link"
+import { supabase } from "@/lib/supabase/client"
+import { useAuth } from "@/contexts/auth-context"
+import { LoadingSpinner } from "@/components/ui/loading-spinner"
+import { DashboardSkeleton } from "@/components/ui/dashboard-skeleton"
+import { UpcomingSessionsCard } from "@/components/ui/upcoming-sessions-card"
+import { MentorStudents } from "@/components/dashboard/mentor-students"
+import { motion } from "framer-motion"
+import { ProgressiveLoading, ProgressiveLoadingContainer } from "@/components/ui/progressive-loading"
+
+interface MentorStats {
+  totalStudents: number;
+  activeStudents: number;
+  pendingHomework: number;
+  sessionsToday: number;
+  upcomingSessions: number;
+  completedThisWeek: number;
+}
+
+interface Activity {
+  id: string;
+  type: "homework" | "session";
+  student: string;
+  subject: string;
+  action: string;
+  time: string;
+}
+
+interface SessionItem {
+  id: string;
+  student: string;
+  subject: string;
+  time: string;
+  status: string;
+}
+
+export default function MentorDashboard() {
+  const { user, profile, loading: authLoading } = useAuth();
+  const router = useRouter();
+  const [stats, setStats] = useState<MentorStats>({
+    totalStudents: 0,
+    activeStudents: 0,
+    pendingHomework: 0,
+    sessionsToday: 0,
+    upcomingSessions: 0,
+    completedThisWeek: 0,
+  });
+
+  const [recentActivity, setRecentActivity] = useState<Activity[]>([]);
+  const [todaysSessions, setTodaysSessions] = useState<SessionItem[]>([]);
+  const [upcomingSessions, setUpcomingSessions] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [mounted, setMounted] = useState(false);
+  
+  // Track loading state for each section
+  const [sectionLoading, setSectionLoading] = useState({
+    stats: true,
+    sessions: true,
+    activity: true
+  });
+
+  // Make sure we're on the client side
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  // Check if user is authorized to view this page
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    
+    if (authLoading || !mounted || sessionStorage.getItem('auth_redirecting')) {
+      return;
+    }
+    
+    const authAttemptTime = localStorage.getItem('authAttemptTime');
+    const now = Date.now();
+    
+    if (authAttemptTime && (now - parseInt(authAttemptTime)) < 10000) {
+      console.log("Recent auth attempt, waiting for auth state to settle");
+      return;
+    }
+    
+    const recentlyVerified = sessionStorage.getItem('recently_verified');
+    
+    if (!user) {
+      console.log("No user found, redirecting to login");
+      sessionStorage.setItem('auth_redirecting', 'true');
+      router.push('/auth/login');
+      return;
+    }
+
+    if (profile && profile.role !== 'mentor') {
+      console.log("User is not a mentor, redirecting");
+      sessionStorage.setItem('auth_redirecting', 'true');
+      router.push('/student/dashboard');
+      return;
+    }
+
+    // Clear any redirect flags
+    sessionStorage.removeItem('auth_redirecting');
+  }, [user, profile, authLoading, mounted, router]);
+
+  // Fetch mentor dashboard data
+  useEffect(() => {
+    if (!user || !profile || profile.role !== 'mentor') return;
+
+    async function fetchDashboardData() {
+      try {
+        setLoading(true);
+        
+        // Set up progressive loading
+        setSectionLoading({
+          stats: true,
+          sessions: true,
+          activity: true
+        });
+        
+        // Fetch mentor's students from assigned_students
+        let allStudents = [];
+        let totalStudentsCount = 0;
+        
+        try {
+          const { data: assignedStudents, error: studentsError } = await supabase
+            .from('assigned_students')
+            .select(`
+              student_id,
+              profiles!assigned_students_student_id_fkey(full_name, email)
+            `)
+            .eq('mentor_id', user.id);
+              
+          if (studentsError) {
+            console.error('Error fetching students from assigned_students:', {
+              message: studentsError.message,
+              details: studentsError.details,
+              hint: studentsError.hint,
+              code: studentsError.code
+            });
+            // Set error state but don't throw - let the dashboard load with empty data
+            setError(`Failed to load students: ${studentsError.message}`);
+          } else {
+            allStudents = assignedStudents || [];
+            totalStudentsCount = allStudents.length;
+            console.log(`Found ${totalStudentsCount} assigned students`);
+          }
+        } catch (fetchError) {
+          console.error('Exception fetching assigned students:', fetchError);
+          setError('Failed to load students data');
+        }
+        
+        // Verify count from database
+        try {
+          const { count: dbCount, error: countError } = await supabase
+            .from('assigned_students')
+            .select('student_id', { count: 'exact', head: true })
+            .eq('mentor_id', user.id);
+            
+          if (countError) {
+            console.error('Error getting student count:', {
+              message: countError.message,
+              details: countError.details,
+              hint: countError.hint,
+              code: countError.code
+            });
+          } else {
+            const dbTotalCount = dbCount || 0;
+            console.log(`Database count of assigned students: ${dbTotalCount}`);
+            
+            // Use the database count if it's higher (more reliable)
+            if (dbTotalCount > totalStudentsCount) {
+              totalStudentsCount = dbTotalCount;
+            }
+          }
+        } catch (countError) {
+          console.error('Exception getting student count:', countError);
+        }
+
+        // Fetch pending homework for mentor's students
+        const studentIds = allStudents.map(s => s.student_id) || [];
+        let pendingHomeworkCount = 0;
+        
+        if (studentIds.length > 0) {
+          try {
+            const { data: homework, error: homeworkError } = await supabase
+              .from('homework')
+              .select('id')
+              .in('student_id', studentIds)
+              .eq('status', 'pending');
+
+            if (!homeworkError) {
+              pendingHomeworkCount = homework?.length || 0;
+            } else {
+              console.error('Error fetching homework:', homeworkError);
+            }
+          } catch (homeworkFetchError) {
+            console.error('Exception fetching homework:', homeworkFetchError);
+          }
+        }
+
+        // Fetch today's sessions
+        const today = new Date().toISOString().split('T')[0];
+        let sessions = [];
+        
+        try {
+          const { data: sessionsData, error: sessionsError } = await supabase
+            .from('sessions')
+            .select('*')
+            .eq('mentor_id', user.id)
+            .gte('scheduled_at', today)
+            .lt('scheduled_at', today + 'T23:59:59');
+            
+          if (sessionsError) {
+            console.error('Error fetching today\'s sessions:', sessionsError);
+          } else {
+            sessions = sessionsData || [];
+          }
+        } catch (sessionsFetchError) {
+          console.error('Exception fetching today\'s sessions:', sessionsFetchError);
+          // Don't set error state for sessions - let dashboard load with empty sessions
+        }
+
+        // Fetch upcoming sessions (next 7 days)
+        const nextWeek = new Date();
+        nextWeek.setDate(nextWeek.getDate() + 7);
+        
+        let upcomingSessionsData = [];
+        
+        try {
+          const { data: upcomingSessions, error: upcomingError } = await supabase
+            .from('sessions')
+            .select(`
+              *,
+              profiles!inner(full_name)
+            `)
+            .eq('mentor_id', user.id)
+            .gte('scheduled_at', new Date().toISOString())
+            .lte('scheduled_at', nextWeek.toISOString())
+            .order('scheduled_at', { ascending: true });
+            
+          if (upcomingError) {
+            console.error('Error fetching upcoming sessions:', {
+              message: upcomingError.message,
+              details: upcomingError.details,
+              hint: upcomingError.hint,
+              code: upcomingError.code
+            });
+            // Don't set error state for sessions - let dashboard load with empty sessions
+          } else {
+            upcomingSessionsData = upcomingSessions || [];
+          }
+        } catch (upcomingFetchError) {
+          console.error('Exception fetching upcoming sessions:', upcomingFetchError);
+        }
+        
+        // Get completed sessions this week
+        let completedThisWeek = 0;
+        try {
+          const startOfWeek = new Date();
+          startOfWeek.setDate(startOfWeek.getDate() - startOfWeek.getDay()); // Start of current week (Sunday)
+          startOfWeek.setHours(0, 0, 0, 0);
+          
+          const { count, error: completedError } = await supabase
+            .from('sessions')
+            .select('id', { count: 'exact', head: true })
+            .eq('mentor_id', user.id)
+            .eq('status', 'completed')
+            .gte('scheduled_at', startOfWeek.toISOString());
+            
+          if (!completedError) {
+            completedThisWeek = count || 0;
+          } else {
+            console.error('Error fetching completed sessions:', completedError);
+          }
+        } catch (completedFetchError) {
+          console.error('Exception fetching completed sessions:', completedFetchError);
+        }
+
+        setStats({
+          totalStudents: totalStudentsCount || 0,
+          activeStudents: allStudents?.length || 0,
+          pendingHomework: pendingHomeworkCount,
+          sessionsToday: sessions?.length || 0,
+          upcomingSessions: upcomingSessionsData?.length || 0,
+          completedThisWeek: completedThisWeek
+        });
+        
+        // Mark stats as loaded - this will allow the UI to start rendering
+        setSectionLoading(prev => ({
+          ...prev,
+          stats: false
+        }));
+        
+        // Consider the dashboard partially loaded once stats are available
+        setLoading(false);
+
+        setUpcomingSessions(upcomingSessionsData || []);
+        
+        // Fetch real recent activity
+        let homeworkData = [];
+        let sessionsData = [];
+        
+        try {
+          // Get recent homework submissions
+          const { data: homework, error: homeworkError } = await supabase
+            .from('homework')
+            .select(`
+              id,
+              student_id,
+              subject,
+              created_at,
+              profiles!inner(full_name)
+            `)
+            .eq('mentor_id', user.id)
+            .order('created_at', { ascending: false })
+            .limit(5);
+            
+          if (homeworkError) {
+            console.error('Error fetching recent homework:', {
+              message: homeworkError.message,
+              details: homeworkError.details,
+              hint: homeworkError.hint,
+              code: homeworkError.code
+            });
+          } else {
+            homeworkData = homework || [];
+          }
+        } catch (homeworkFetchError) {
+          console.error('Exception fetching recent homework:', homeworkFetchError);
+        }
+        
+        try {
+          // Get recent sessions
+          const { data: sessions, error: sessionsError } = await supabase
+            .from('sessions')
+            .select(`
+              id,
+              student_id,
+              subject,
+              scheduled_at,
+              status,
+              profiles!inner(full_name)
+            `)
+            .eq('mentor_id', user.id)
+            .order('scheduled_at', { ascending: false })
+            .limit(5);
+            
+          if (sessionsError) {
+            console.error('Error fetching recent sessions:', {
+              message: sessionsError.message,
+              details: sessionsError.details,
+              hint: sessionsError.hint,
+              code: sessionsError.code
+            });
+          } else {
+            sessionsData = sessions || [];
+          }
+        } catch (sessionsFetchError) {
+          console.error('Exception fetching recent sessions:', sessionsFetchError);
+        }
+          
+        // Combine and format the activity data
+        const recentActivityData = [];
+        
+        // Add homework activities
+        if (homeworkData && homeworkData.length > 0) {
+          homeworkData.forEach(hw => {
+            const timeDiff = new Date().getTime() - new Date(hw.created_at).getTime();
+            const hoursAgo = Math.floor(timeDiff / (1000 * 60 * 60));
+            const daysAgo = Math.floor(hoursAgo / 24);
+            
+            let timeText = 'just now';
+            if (hoursAgo > 0 && hoursAgo < 24) {
+              timeText = `${hoursAgo}h ago`;
+            } else if (daysAgo > 0) {
+              timeText = `${daysAgo}d ago`;
+            }
+            
+            recentActivityData.push({
+              id: hw.id,
+              type: 'homework',
+              student: hw.profiles?.full_name || 'Student',
+              subject: hw.subject || 'Unknown',
+              action: 'submitted homework',
+              time: timeText
+            });
+          });
+        }
+        
+        // Add session activities
+        if (sessionsData && sessionsData.length > 0) {
+          sessionsData.forEach(session => {
+            const sessionDate = new Date(session.scheduled_at);
+            const now = new Date();
+            const isPast = sessionDate < now;
+            
+            const timeDiff = isPast 
+              ? now.getTime() - sessionDate.getTime()
+              : sessionDate.getTime() - now.getTime();
+              
+            const hoursAgo = Math.floor(timeDiff / (1000 * 60 * 60));
+            const daysAgo = Math.floor(hoursAgo / 24);
+            
+            let timeText = isPast ? 'just now' : 'soon';
+            if (hoursAgo > 0 && hoursAgo < 24) {
+              timeText = isPast ? `${hoursAgo}h ago` : `in ${hoursAgo}h`;
+            } else if (daysAgo > 0) {
+              timeText = isPast ? `${daysAgo}d ago` : `in ${daysAgo}d`;
+            }
+            
+            const action = isPast 
+              ? session.status === 'completed' ? 'completed session' : 'missed session'
+              : 'scheduled session';
+            
+            recentActivityData.push({
+              id: session.id,
+              type: 'session',
+              student: session.profiles?.full_name || 'Student',
+              subject: session.subject || 'Unknown',
+              action,
+              time: timeText
+            });
+          });
+        }
+        
+        // Sort by most recent first (based on time field)
+        recentActivityData.sort((a, b) => {
+          // Extract numeric value from time strings
+          const getTimeValue = (timeStr) => {
+            if (timeStr === 'just now' || timeStr === 'soon') return 0;
+            const match = timeStr.match(/(\d+)/);
+            return match ? parseInt(match[1]) : 0;
+          };
+          
+          const aValue = getTimeValue(a.time);
+          const bValue = getTimeValue(b.time);
+          
+          // Compare "ago" vs "in" (past vs future)
+          const aIsPast = a.time.includes('ago');
+          const bIsPast = b.time.includes('ago');
+          
+          if (aIsPast && !bIsPast) return -1;
+          if (!aIsPast && bIsPast) return 1;
+          
+          // For same direction (both past or both future)
+          if (aIsPast && bIsPast) {
+            // For "ago", smaller numbers are more recent
+            return aValue - bValue;
+          } else {
+            // For "in", smaller numbers are sooner
+            return aValue - bValue;
+          }
+          
+          return 0;
+        });
+        
+        // Take the most recent 5 activities
+        setRecentActivity(recentActivityData.slice(0, 5));
+      } catch (activityError) {
+        console.error('Error processing activity data:', activityError);
+        // Fallback to empty activity list
+        setRecentActivity([]);
+      }
+    }
+
+    fetchDashboardData();
+  }, [user, profile]);
+
+  if (!mounted) {
+    return null;
+  }
+
+  if (authLoading) {
+    return (
+      <div className="container mx-auto py-10">
+        <LoadingSpinner size="lg" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="container mx-auto py-6 space-y-8">
+      <div className="flex flex-col space-y-2">
+        <h1 className="text-3xl font-bold tracking-tight">Mentor Dashboard</h1>
+        <p className="text-muted-foreground">
+          Welcome back, {profile?.full_name || 'Mentor'}
+        </p>
+      </div>
+
+      {loading && !error ? (
+        <DashboardSkeleton />
+      ) : error ? (
+        <div className="rounded-lg border border-destructive bg-destructive/10 p-8 text-center">
+          <AlertCircle className="mx-auto h-10 w-10 text-destructive mb-4" />
+          <h2 className="text-xl font-semibold mb-2">Error Loading Dashboard</h2>
+          <p className="text-muted-foreground mb-4">{error}</p>
+          <Button 
+            variant="outline" 
+            onClick={() => window.location.reload()}
+          >
+            Try Again
+          </Button>
+        </div>
+      ) : (
+        <ProgressiveLoadingContainer>
+          {/* Stats Overview */}
+          <ProgressiveLoading isLoading={sectionLoading.stats}>
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                  <CardTitle className="text-sm font-medium">
+                    Total Students
+                  </CardTitle>
+                  <Users className="h-4 w-4 text-muted-foreground" />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">{stats.totalStudents}</div>
+                  <p className="text-xs text-muted-foreground">
+                    {stats.activeStudents} active this month
+                  </p>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                  <CardTitle className="text-sm font-medium">
+                    Pending Homework
+                  </CardTitle>
+                  <BookOpen className="h-4 w-4 text-muted-foreground" />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">{stats.pendingHomework}</div>
+                  <p className="text-xs text-muted-foreground">
+                    Submissions to review
+                  </p>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                  <CardTitle className="text-sm font-medium">
+                    Today's Sessions
+                  </CardTitle>
+                  <Calendar className="h-4 w-4 text-muted-foreground" />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">{stats.sessionsToday}</div>
+                  <p className="text-xs text-muted-foreground">
+                    {stats.upcomingSessions} upcoming this week
+                  </p>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                  <CardTitle className="text-sm font-medium">
+                    Completed This Week
+                  </CardTitle>
+                  <CheckCircle className="h-4 w-4 text-muted-foreground" />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">{stats.completedThisWeek}</div>
+                  <p className="text-xs text-muted-foreground">
+                    Sessions completed
+                  </p>
+                </CardContent>
+              </Card>
+              <Card className="md:col-span-2 lg:col-span-2">
+                <CardHeader>
+                  <CardTitle>Recent Activity</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {recentActivity.length > 0 ? (
+                    <div className="space-y-4">
+                      {recentActivity.map((activity) => (
+                        <div key={activity.id} className="flex items-center">
+                          <div className="mr-4">
+                            {activity.type === 'homework' ? (
+                              <div className="rounded-full bg-blue-100 p-2">
+                                <BookOpen className="h-4 w-4 text-blue-600" />
+                              </div>
+                            ) : (
+                              <div className="rounded-full bg-green-100 p-2">
+                                <Video className="h-4 w-4 text-green-600" />
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex-1 space-y-1">
+                            <p className="text-sm font-medium leading-none">
+                              {activity.student}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              {activity.action} for {activity.subject}
+                            </p>
+                          </div>
+                          <div className="ml-auto text-xs text-muted-foreground">
+                            {activity.time}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-center py-4">
+                      <p className="text-muted-foreground">No recent activity</p>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          </ProgressiveLoading>
+
+          {/* Upcoming Sessions */}
+          <ProgressiveLoading isLoading={sectionLoading.sessions}>
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+              <Card className="col-span-full">
+                <CardHeader>
+                  <CardTitle>Upcoming Sessions</CardTitle>
+                  <CardDescription>
+                    Your scheduled sessions for the next 7 days
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <UpcomingSessionsCard sessions={upcomingSessions} />
+                </CardContent>
+              </Card>
+            </div>
+          </ProgressiveLoading>
+
+          {/* Students Overview */}
+          <div>
+            <MentorStudents />
+          </div>
+        </ProgressiveLoadingContainer>
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,61 @@
+"use client";
+
+import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
+import { useEffect, useState } from "react";
+import { Homework } from "@/types/supabase";
+
+const supabase = createClientComponentClient();
+
+async function fetchHomework() {
+  const { data, error } = await supabase
+    .from("homework")
+    .select(
+      `
+    *,
+    student:student_id(full_name, email),
+    mentor:mentor_id(full_name, email, subject_specialization)
+  `
+    )
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    console.error("Error fetching homework:", error);
+    return [];
+  }
+
+  return data as Homework[];
+}
+
+export default function HomeworkPage() {
+  const [homework, setHomework] = useState<Homework[]>([]);
+
+  useEffect(() => {
+    const getHomework = async () => {
+      const homeworkData = await fetchHomework();
+      setHomework(homeworkData);
+    };
+
+    getHomework();
+  }, []);
+
+  return (
+    <div>
+      <h1>Homework</h1>
+      {homework.length > 0 ? (
+        <ul>
+          {homework.map((hw) => (
+            <li key={hw.id}>
+              <h2>{hw.title}</h2>
+              <p>Description: {hw.description}</p>
+              <p>Due Date: {hw.due_date}</p>
+              <p>Student: {hw.student?.full_name}</p>
+              <p>Mentor: {hw.mentor?.full_name}</p>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p>No homework found.</p>
+      )}
+    </div>
+  );
+}

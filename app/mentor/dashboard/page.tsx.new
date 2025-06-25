@@ -1,0 +1,784 @@
+"use client"
+
+import { useState, useEffect } from "react"
+import { useRouter } from "next/navigation"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Progress } from "@/components/ui/progress"
+import { Users, BookOpen, Calendar, Clock, CheckCircle, AlertCircle, User, Video } from "lucide-react"
+import Link from "next/link"
+import { supabase } from "@/lib/supabase/client"
+import { useAuth } from "@/contexts/auth-context"
+import { LoadingSpinner } from "@/components/ui/loading-spinner"
+import { DashboardSkeleton } from "@/components/ui/dashboard-skeleton"
+import { UpcomingSessionsCard } from "@/components/ui/upcoming-sessions-card"
+import { MentorStudents } from "@/components/dashboard/mentor-students"
+
+interface MentorStats {
+  totalStudents: number
+  activeStudents: number
+  pendingHomework: number
+  sessionsToday: number
+  upcomingSessions: number
+  completedThisWeek: number
+}
+
+interface Activity {
+  id: string
+  type: "homework" | "session"
+  student: string
+  subject: string
+  action: string
+  time: string
+}
+
+interface SessionItem {
+  id: string
+  student: string
+  subject: string
+  time: string
+  status: string
+}
+
+export default function MentorDashboard() {
+  const { user, profile, loading: authLoading } = useAuth()
+  const router = useRouter()
+  const [stats, setStats] = useState<MentorStats>({
+    totalStudents: 0,
+    activeStudents: 0,
+    pendingHomework: 0,
+    sessionsToday: 0,
+    upcomingSessions: 0,
+    completedThisWeek: 0,
+  })
+
+  const [recentActivity, setRecentActivity] = useState<Activity[]>([])
+  const [todaysSessions, setTodaysSessions] = useState<SessionItem[]>([])
+  const [upcomingSessions, setUpcomingSessions] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [mounted, setMounted] = useState(false)
+  
+  // Track loading state for each section
+  const [sectionLoading, setSectionLoading] = useState({
+    stats: true,
+    sessions: true,
+    activity: true
+  })
+
+  // Make sure we're on the client side
+  useEffect(() => {
+    setMounted(true)
+  }, [])
+
+  // Check if user is authorized to view this page
+  useEffect(() => {
+    // Don't run anything during server-side rendering
+    if (typeof window === 'undefined') return;
+    
+    // Don't do anything if:
+    // 1. We're still loading auth state
+    // 2. We're not mounted yet (avoid server-side redirect attempts)
+    // 3. We're already in the process of redirecting
+    if (authLoading || !mounted || sessionStorage.getItem('auth_redirecting')) {
+      return;
+    }
+    
+    // Check if we recently tried to sign in - if so, give more time before redirecting
+    const authAttemptTime = localStorage.getItem('authAttemptTime');
+    const now = Date.now();
+    
+    if (authAttemptTime && (now - parseInt(authAttemptTime)) < 10000) {
+      // Less than 10 seconds since auth attempt - wait for auth to settle
+      console.log("Recent auth attempt, waiting for auth state to settle");
+      return;
+    }
+    
+    // Check if we just verified our email - if so, we'll be more permissive
+    const recentlyVerified = sessionStorage.getItem('recently_verified');
+    
+    // If we're recently verified or we're already designated as a mentor, stay
+    if (recentlyVerified === 'true' || localStorage.getItem('userRole') === 'mentor') {
+      console.log("User is coming from verification or is a mentor, staying on dashboard");
+      return;
+    }
+    
+    // Only check authorization if not already authorized
+    const isAuthorized = !!user && !!profile && profile.role === 'mentor';
+    
+    if (!isAuthorized) {
+      // Debug logging
+      console.log("Auth state on mentor dashboard:", {
+        user: !!user, 
+        profile: profile?.role || 'none',
+        loading: authLoading
+      });
+      
+      // Add a delay counter to prevent immediate redirects
+      const redirectCount = parseInt(sessionStorage.getItem('redirect_count') || '0');
+      
+      // If we've tried redirecting too many times, just stay
+      if (redirectCount > 2) {
+        console.log("Too many redirects, staying on current page");
+        sessionStorage.removeItem('redirect_count');
+        return;
+      }
+      
+      // If not logged in at all, go to login page
+      if (!user) {
+        console.log("No user, redirecting to login");
+        sessionStorage.setItem('auth_redirecting', 'true');
+        sessionStorage.setItem('redirect_count', (redirectCount + 1).toString());
+        
+        setTimeout(() => {
+          router.push('/auth/login');
+          setTimeout(() => sessionStorage.removeItem('auth_redirecting'), 2000);
+        }, 500);
+        return;
+      }
+      
+      // If logged in but wrong role, go to appropriate dashboard
+      if (profile && profile.role !== 'mentor') {
+        console.log(`User has role ${profile.role}, redirecting to appropriate dashboard`);
+        sessionStorage.setItem('auth_redirecting', 'true');
+        sessionStorage.setItem('redirect_count', (redirectCount + 1).toString());
+        
+        const redirectPath = profile.role === 'student' 
+          ? '/student/dashboard' 
+          : '/admin/dashboard';
+          
+        setTimeout(() => {
+          router.push(redirectPath);
+          setTimeout(() => sessionStorage.removeItem('auth_redirecting'), 2000);
+        }, 500);
+      }
+    } else {
+      console.log("User is authorized as mentor, staying on dashboard");
+      // Set a flag in localStorage to indicate we've successfully accessed the mentor dashboard
+      localStorage.setItem('mentor_dashboard_loaded', 'true');
+      // Clear any redirect counters
+      sessionStorage.removeItem('redirect_count');
+    }
+  }, [user, profile, authLoading, router, mounted])
+
+  useEffect(() => {
+    // Don't fetch data until we're sure we have a user and proper role
+    if (!user || authLoading || !mounted) return
+    
+    // Safety check - only proceed if we have a mentor profile
+    if (profile?.role !== 'mentor' && profile?.role !== undefined) {
+      console.log("Not a mentor profile, not fetching mentor data");
+      return
+    }
+    
+    // Fetch data in chunks for progressive loading
+    async function fetchMentorDashboardData() {
+      try {
+        if (!supabase) {
+          throw new Error("Supabase client not initialized")
+        }
+        
+        // Always use real data from Supabase, no demo mode
+
+        // First chunk: Fetch basic stats (high priority)
+        await fetchBasicStats();
+        
+        // Second chunk: Fetch today's sessions
+        await fetchTodaysSessions();
+        
+        // Third chunk: Fetch recent activity
+        await fetchRecentActivity();
+      } catch (error) {
+        console.error("Error fetching mentor dashboard data:", error)
+        setError("Failed to load dashboard data")
+        setLoading(false)
+      }
+    }
+    
+    async function fetchBasicStats() {
+      try {
+        const mentorId = user.id
+        
+        // Fetch students assigned to this mentor
+        const { data: students, error: studentsError } = await supabase
+          .from('students')
+          .select('id, study_streak')
+          .eq('mentor_id', mentorId)
+        
+        if (studentsError) {
+          throw studentsError
+        }
+        
+        const totalStudents = students?.length || 0
+        
+        // Count active students (with study streak > 0)
+        const activeStudents = students?.filter(student => student.study_streak > 0).length || 0
+        
+        // Get student IDs for later use
+        const studentIds = students?.map(student => student.id) || []
+        
+        // Fetch homework awaiting review
+        const { data: pendingHomeworkData, error: homeworkError } = await supabase
+          .from('homework')
+          .select('id')
+          .eq('mentor_id', mentorId)
+          .eq('status', 'submitted')
+        
+        if (homeworkError) {
+          throw homeworkError
+        }
+        
+        const pendingHomework = pendingHomeworkData?.length || 0
+        
+        // Get today's date in YYYY-MM-DD format
+        const today = new Date().toISOString().split('T')[0]
+        
+        // Get start of week (Sunday)
+        const startOfWeek = new Date()
+        startOfWeek.setDate(startOfWeek.getDate() - startOfWeek.getDay())
+        startOfWeek.setHours(0, 0, 0, 0)
+        
+        // Fetch all sessions
+        const { data: sessions, error: sessionsError } = await supabase
+          .from('sessions')
+          .select(`
+            id, 
+            title,
+            subject,
+            scheduled_at,
+            duration,
+            status
+          `)
+          .eq('mentor_id', mentorId)
+        
+        if (sessionsError) {
+          throw sessionsError
+        }
+        
+        // Filter sessions for today
+        const todaysSessions = sessions?.filter(session => {
+          const sessionDate = new Date(session.scheduled_at).toISOString().split('T')[0]
+          return sessionDate === today
+        }) || []
+        
+        // Get upcoming sessions (status = scheduled and date >= today)
+        const upcomingSessionsCount = sessions?.filter(session => 
+          session.status === 'scheduled' && 
+          new Date(session.scheduled_at) >= new Date(today)
+        ).length || 0
+        
+        // Format upcoming sessions for display
+        const formattedUpcomingSessions = sessions?.filter(session => 
+          session.status === 'scheduled' && 
+          new Date(session.scheduled_at) >= new Date(today)
+        ).map(session => {
+          // Get student info
+          const studentInfo = students?.find(s => s.id === session.student_id)
+          
+          return {
+            id: session.id,
+            title: session.title,
+            subject: session.subject,
+            studentName: studentInfo?.full_name || "Student",
+            meetingLink: session.meeting_link,
+            date: new Date(session.scheduled_at).toLocaleDateString('en-US', {
+              year: 'numeric',
+              month: 'long',
+              day: 'numeric'
+            }),
+            time: new Date(session.scheduled_at).toLocaleTimeString('en-US', {
+              hour: '2-digit',
+              minute: '2-digit'
+            })
+          }
+        }).sort((a, b) => {
+          // Sort by date and time
+          const dateA = new Date(`${a.date} ${a.time}`)
+          const dateB = new Date(`${b.date} ${b.time}`)
+          return dateA.getTime() - dateB.getTime()
+        }).slice(0, 5) || [] // Limit to 5 upcoming sessions
+        
+        // Set upcoming sessions
+        setUpcomingSessions(formattedUpcomingSessions)
+        
+        // Get sessions completed this week
+        const completedThisWeek = sessions?.filter(session => {
+          const sessionDate = new Date(session.scheduled_at)
+          return session.status === 'completed' && sessionDate >= startOfWeek
+        }).length || 0
+        
+        // Set the stats
+        setStats({
+          totalStudents,
+          activeStudents,
+          pendingHomework,
+          sessionsToday: todaysSessions.length,
+          upcomingSessions: upcomingSessionsCount,
+          completedThisWeek,
+        })
+        
+        // Mark stats as loaded
+        setSectionLoading(prev => ({ ...prev, stats: false }))
+      } catch (error) {
+        console.error("Error fetching basic stats:", error)
+        setSectionLoading(prev => ({ ...prev, stats: false }))
+      }
+    }
+    
+    async function fetchTodaysSessions() {
+      try {
+        const mentorId = user.id
+        
+        // Get today's date in YYYY-MM-DD format
+        const today = new Date().toISOString().split('T')[0]
+        
+        console.log("Fetching today's sessions for mentor:", mentorId);
+        
+        // Check if the sessions table exists first
+        try {
+          const { error: tableCheckError } = await supabase
+            .from('sessions')
+            .select('id')
+            .limit(1);
+            
+          if (tableCheckError) {
+            console.warn("Sessions table may not exist:", tableCheckError.message);
+            // If table doesn't exist, just return empty array
+            setTodaysSessions([]);
+            setSectionLoading(prev => ({ ...prev, sessions: false }));
+            return;
+          }
+        } catch (e) {
+          console.warn("Error checking sessions table:", e);
+          // Continue anyway, the main query will handle errors
+        }
+        
+        // Fetch all sessions
+        const { data: sessions, error: sessionsError } = await supabase
+          .from('sessions')
+          .select(`
+            id, 
+            title,
+            subject,
+            scheduled_at,
+            duration,
+            status,
+            student_id
+          `)
+          .eq('mentor_id', mentorId);
+        
+        if (sessionsError) {
+          console.error("Error fetching sessions:", sessionsError.message);
+          setTodaysSessions([]);
+          setSectionLoading(prev => ({ ...prev, sessions: false }));
+          return;
+        }
+        
+        if (!sessions || sessions.length === 0) {
+          console.log("No sessions found for mentor");
+          setTodaysSessions([]);
+          setSectionLoading(prev => ({ ...prev, sessions: false }));
+          return;
+        }
+        
+        // Filter sessions for today
+        const todaysSessions = sessions.filter(session => {
+          const sessionDate = new Date(session.scheduled_at).toISOString().split('T')[0];
+          return sessionDate === today;
+        });
+        
+        console.log(`Found ${todaysSessions.length} sessions for today`);
+        
+        // Get student IDs
+        const studentIds = todaysSessions.map(session => session.student_id);
+        
+        // Fetch student profiles if we have any sessions
+        let studentProfiles = [];
+        if (studentIds.length > 0) {
+          const { data: profiles, error: profilesError } = await supabase
+            .from('profiles')
+            .select('id, full_name')
+            .in('id', studentIds);
+            
+          if (profilesError) {
+            console.error("Error fetching student profiles:", profilesError.message);
+          } else {
+            studentProfiles = profiles || [];
+          }
+        }
+        
+        // Format sessions for display
+        const formattedSessions = todaysSessions.map(session => {
+          const studentProfile = studentProfiles.find(p => p.id === session.student_id);
+          
+          return {
+            id: session.id,
+            student: studentProfile?.full_name || "Student",
+            subject: session.subject,
+            time: new Date(session.scheduled_at).toLocaleTimeString('en-US', {
+              hour: '2-digit',
+              minute: '2-digit'
+            }),
+            status: session.status
+          };
+        }).sort((a, b) => {
+          // Sort by time
+          const timeA = new Date(`1970/01/01 ${a.time}`);
+          const timeB = new Date(`1970/01/01 ${b.time}`);
+          return timeA.getTime() - timeB.getTime();
+        });
+        
+        setTodaysSessions(formattedSessions);
+        setSectionLoading(prev => ({ ...prev, sessions: false }));
+      } catch (error) {
+        console.error("Error fetching today's sessions:", error);
+        setSectionLoading(prev => ({ ...prev, sessions: false }));
+      }
+    }
+    
+    async function fetchRecentActivity() {
+      try {
+        const mentorId = user.id;
+        
+        // Fetch recent homework submissions
+        const { data: homeworkData, error: homeworkError } = await supabase
+          .from('homework')
+          .select(`
+            id,
+            title,
+            subject,
+            student_id,
+            status,
+            submitted_at,
+            created_at
+          `)
+          .eq('mentor_id', mentorId)
+          .order('submitted_at', { ascending: false })
+          .limit(5);
+        
+        if (homeworkError) {
+          console.error("Error fetching homework:", homeworkError.message);
+        }
+        
+        // Fetch recent sessions
+        const { data: sessionsData, error: sessionsError } = await supabase
+          .from('sessions')
+          .select(`
+            id,
+            title,
+            subject,
+            student_id,
+            status,
+            scheduled_at
+          `)
+          .eq('mentor_id', mentorId)
+          .order('scheduled_at', { ascending: false })
+          .limit(5);
+        
+        if (sessionsError) {
+          console.error("Error fetching sessions:", sessionsError.message);
+        }
+        
+        // Get all student IDs
+        const studentIds = [
+          ...(homeworkData || []).map(h => h.student_id),
+          ...(sessionsData || []).map(s => s.student_id)
+        ].filter((id, index, self) => id && self.indexOf(id) === index);
+        
+        // Fetch student profiles
+        let studentProfiles = [];
+        if (studentIds.length > 0) {
+          const { data: profiles, error: profilesError } = await supabase
+            .from('profiles')
+            .select('id, full_name')
+            .in('id', studentIds);
+            
+          if (profilesError) {
+            console.error("Error fetching student profiles:", profilesError.message);
+          } else {
+            studentProfiles = profiles || [];
+          }
+        }
+        
+        // Format homework activities
+        const homeworkActivities = (homeworkData || []).map(homework => {
+          const studentProfile = studentProfiles.find(p => p.id === homework.student_id);
+          
+          let action = '';
+          if (homework.status === 'submitted') {
+            action = 'submitted homework';
+          } else if (homework.status === 'graded') {
+            action = 'homework graded';
+          } else if (homework.status === 'pending') {
+            action = 'homework assigned';
+          }
+          
+          return {
+            id: `hw-${homework.id}`,
+            type: 'homework' as const,
+            student: studentProfile?.full_name || 'Student',
+            subject: homework.subject,
+            action,
+            time: new Date(homework.submitted_at || homework.created_at).toLocaleString()
+          };
+        });
+        
+        // Format session activities
+        const sessionActivities = (sessionsData || []).map(session => {
+          const studentProfile = studentProfiles.find(p => p.id === session.student_id);
+          
+          let action = '';
+          if (session.status === 'scheduled') {
+            action = 'session scheduled';
+          } else if (session.status === 'completed') {
+            action = 'session completed';
+          } else if (session.status === 'cancelled') {
+            action = 'session cancelled';
+          }
+          
+          return {
+            id: `session-${session.id}`,
+            type: 'session' as const,
+            student: studentProfile?.full_name || 'Student',
+            subject: session.subject,
+            action,
+            time: new Date(session.scheduled_at).toLocaleString()
+          };
+        });
+        
+        // Combine and sort activities
+        const allActivities = [...homeworkActivities, ...sessionActivities]
+          .sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime())
+          .slice(0, 10);
+        
+        setRecentActivity(allActivities);
+        setSectionLoading(prev => ({ ...prev, activity: false }));
+      } catch (error) {
+        console.error("Error fetching recent activity:", error);
+        setSectionLoading(prev => ({ ...prev, activity: false }));
+      }
+    }
+    
+    fetchMentorDashboardData();
+    
+    // Set overall loading state based on section loading
+    const checkAllSectionsLoaded = () => {
+      if (!sectionLoading.stats && !sectionLoading.sessions && !sectionLoading.activity) {
+        setLoading(false);
+      }
+    };
+    
+    // Check if all sections are loaded whenever section loading states change
+    checkAllSectionsLoaded();
+  }, [user, profile, authLoading, mounted, sectionLoading]);
+
+  // If we're still loading auth or not mounted, show a loading spinner
+  if (authLoading || !mounted) {
+    return <DashboardSkeleton />
+  }
+
+  // If there's an error, show it
+  if (error) {
+    return (
+      <div className="container mx-auto py-8">
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Error</AlertTitle>
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      </div>
+    )
+  }
+
+  return (
+    <div className="container mx-auto py-6 animate-fadeIn">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6">
+        <div>
+          <h1 className="text-3xl font-bold">Mentor Dashboard</h1>
+          <p className="text-gray-500 mt-1">Welcome back, {profile?.full_name || "Mentor"}</p>
+        </div>
+        <div className="mt-4 md:mt-0 flex gap-2">
+          <Button asChild>
+            <Link href="/mentor/meeting-requests">
+              <Video className="mr-2 h-4 w-4" />
+              Meeting Requests
+            </Link>
+          </Button>
+        </div>
+      </div>
+
+      {/* Stats Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-6">
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-lg">Students</CardTitle>
+            <CardDescription>Your assigned students</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex justify-between items-center">
+              <div className="text-3xl font-bold">{stats.totalStudents}</div>
+              <Users className="h-8 w-8 text-blue-500" />
+            </div>
+            <div className="mt-2">
+              <div className="flex justify-between text-sm mb-1">
+                <span>Active students</span>
+                <span className="font-medium">{stats.activeStudents} / {stats.totalStudents}</span>
+              </div>
+              <Progress value={(stats.activeStudents / Math.max(stats.totalStudents, 1)) * 100} className="h-2" />
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-lg">Homework</CardTitle>
+            <CardDescription>Pending review</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex justify-between items-center">
+              <div className="text-3xl font-bold">{stats.pendingHomework}</div>
+              <BookOpen className="h-8 w-8 text-amber-500" />
+            </div>
+            <div className="mt-4">
+              {stats.pendingHomework > 0 ? (
+                <Button variant="outline" size="sm" asChild className="w-full">
+                  <Link href="/mentor/homework">
+                    <CheckCircle className="mr-2 h-4 w-4" />
+                    Review Homework
+                  </Link>
+                </Button>
+              ) : (
+                <Badge variant="outline" className="w-full justify-center py-1">All caught up!</Badge>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-lg">Today's Sessions</CardTitle>
+            <CardDescription>Scheduled for today</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex justify-between items-center">
+              <div className="text-3xl font-bold">{stats.sessionsToday}</div>
+              <Calendar className="h-8 w-8 text-green-500" />
+            </div>
+            <div className="mt-2">
+              <div className="flex justify-between text-sm mb-1">
+                <span>Upcoming sessions</span>
+                <span className="font-medium">{stats.upcomingSessions}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span>Completed this week</span>
+                <span className="font-medium">{stats.completedThisWeek}</span>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Main Content */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Left Column */}
+        <div className="lg:col-span-2 space-y-6">
+          {/* My Students */}
+          <MentorStudents />
+
+          {/* Today's Sessions */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Today's Sessions</CardTitle>
+              <CardDescription>Your scheduled sessions for today</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {sectionLoading.sessions ? (
+                <div className="flex justify-center py-8">
+                  <LoadingSpinner size="lg" animation="border" />
+                </div>
+              ) : todaysSessions.length === 0 ? (
+                <div className="text-center py-8">
+                  <Calendar className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+                  <h3 className="text-lg font-semibold mb-2">No Sessions Today</h3>
+                  <p className="text-gray-600">You don't have any sessions scheduled for today.</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {todaysSessions.map((session) => (
+                    <div key={session.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                      <div className="flex items-center">
+                        <div className="bg-green-100 p-2 rounded-full mr-3">
+                          <Clock className="h-5 w-5 text-green-600" />
+                        </div>
+                        <div>
+                          <p className="font-medium">{session.student}</p>
+                          <p className="text-sm text-gray-500">{session.subject}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center">
+                        <Badge variant="outline" className="mr-3">{session.time}</Badge>
+                        <Button size="sm">Join</Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Right Column */}
+        <div className="space-y-6">
+          {/* Upcoming Sessions */}
+          <UpcomingSessionsCard sessions={upcomingSessions} loading={sectionLoading.sessions} />
+
+          {/* Recent Activity */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Recent Activity</CardTitle>
+              <CardDescription>Latest updates from your students</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {sectionLoading.activity ? (
+                <div className="flex justify-center py-8">
+                  <LoadingSpinner size="lg" animation="border" />
+                </div>
+              ) : recentActivity.length === 0 ? (
+                <div className="text-center py-8">
+                  <Clock className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+                  <h3 className="text-lg font-semibold mb-2">No Recent Activity</h3>
+                  <p className="text-gray-600">There hasn't been any activity recently.</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {recentActivity.map((activity) => (
+                    <div key={activity.id} className="flex items-start gap-3">
+                      <div className={`mt-0.5 p-1.5 rounded-full ${
+                        activity.type === 'homework' ? 'bg-amber-100' : 'bg-green-100'
+                      }`}>
+                        {activity.type === 'homework' ? (
+                          <BookOpen className="h-3.5 w-3.5 text-amber-600" />
+                        ) : (
+                          <Calendar className="h-3.5 w-3.5 text-green-600" />
+                        )}
+                      </div>
+                      <div>
+                        <p className="text-sm">
+                          <span className="font-medium">{activity.student}</span>{' '}
+                          <span className="text-gray-500">{activity.action}</span>{' '}
+                          <span className="font-medium">{activity.subject}</span>
+                        </p>
+                        <p className="text-xs text-gray-500">{activity.time}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    </div>
+  )
+}

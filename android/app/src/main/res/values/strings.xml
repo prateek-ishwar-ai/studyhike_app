@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Studyhike</string>
+    <string name="title_activity_main">Studyhike</string>
+    <string name="package_name">in.studyhike.app</string>
+    <string name="custom_url_scheme">in.studyhike.app</string>
+</resources>

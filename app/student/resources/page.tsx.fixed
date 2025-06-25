@@ -1,0 +1,461 @@
+"use client"
+
+import { useState, useEffect } from "react"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Badge } from "@/components/ui/badge"
+import { Input } from "@/components/ui/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { FileText, Download, Search, BookOpen, Video, FileImage, Star, Loader } from "lucide-react"
+import { supabase } from "@/lib/supabase/client"
+import { useRouter } from "next/navigation"
+import { toast } from "@/components/ui/use-toast"
+
+interface Resource {
+  id: number
+  title: string
+  description: string
+  subject: string
+  type: "pdf" | "video" | "image" | "document"
+  difficulty: "easy" | "medium" | "hard"
+  rating: number
+  downloads: number
+  uploadedBy: string
+  uploadDate: string
+  fileUrl: string
+  mentor_id?: string
+}
+
+export default function ResourcesPage() {
+  const [resources, setResources] = useState<Resource[]>([])
+  const [loading, setLoading] = useState(true)
+  const router = useRouter()
+
+  const [searchTerm, setSearchTerm] = useState("")
+  const [selectedSubject, setSelectedSubject] = useState("all")
+  const [selectedType, setSelectedType] = useState("all")
+  const [selectedDifficulty, setSelectedDifficulty] = useState("all")
+
+  // Fetch resources from Supabase
+  useEffect(() => {
+    async function fetchResources() {
+      try {
+        setLoading(true)
+        
+        if (!supabase) {
+          console.error("Supabase client not initialized")
+          setLoading(false)
+          return
+        }
+
+        // Get current user
+        const { data: { user }, error: userError } = await supabase.auth.getUser()
+        
+        if (userError || !user) {
+          console.error("Authentication error:", userError)
+          router.push('/auth/login')
+          return
+        }
+
+        // Get resources
+        const { data, error } = await supabase
+          .from('learning_resources')
+          .select(`
+            *,
+            mentor:profiles!learning_resources_mentor_id_fkey(full_name)
+          `)
+          .order('created_at', { ascending: false })
+        
+        if (error) {
+          console.error("Error fetching resources:", error)
+          toast({
+            title: "Error",
+            description: "Failed to load resources. Please try again later.",
+            variant: "destructive"
+          })
+        } else if (data) {
+          const formattedResources = data.map(resource => ({
+            id: resource.id,
+            title: resource.title,
+            description: resource.description,
+            subject: resource.subject,
+            type: resource.resource_type,
+            difficulty: resource.difficulty,
+            rating: resource.rating || 0,
+            downloads: resource.download_count || 0,
+            uploadedBy: resource.mentor?.full_name || "Unknown Mentor",
+            uploadDate: resource.created_at,
+            fileUrl: resource.file_url,
+            mentor_id: resource.mentor_id
+          }))
+          
+          setResources(formattedResources)
+        }
+      } catch (error) {
+        console.error("Error in fetch resources:", error)
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    fetchResources()
+  }, [router])
+
+  const filteredResources = resources.filter((resource) => {
+    const matchesSearch =
+      resource.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      resource.description.toLowerCase().includes(searchTerm.toLowerCase())
+    const matchesSubject = selectedSubject === "all" || resource.subject === selectedSubject
+    const matchesType = selectedType === "all" || resource.type === selectedType
+    const matchesDifficulty = selectedDifficulty === "all" || resource.difficulty === selectedDifficulty
+
+    return matchesSearch && matchesSubject && matchesType && matchesDifficulty
+  })
+
+  const getTypeIcon = (type: string) => {
+    switch (type) {
+      case "pdf":
+        return <FileText className="h-5 w-5 text-red-600" />
+      case "video":
+        return <Video className="h-5 w-5 text-blue-600" />
+      case "image":
+        return <FileImage className="h-5 w-5 text-green-600" />
+      case "document":
+        return <BookOpen className="h-5 w-5 text-purple-600" />
+      default:
+        return <FileText className="h-5 w-5 text-gray-600" />
+    }
+  }
+
+  const getSubjectColor = (subject: string) => {
+    switch (subject) {
+      case "Physics":
+        return "bg-blue-100 text-blue-800"
+      case "Chemistry":
+        return "bg-green-100 text-green-800"
+      case "Mathematics":
+        return "bg-purple-100 text-purple-800"
+      default:
+        return "bg-gray-100 text-gray-800"
+    }
+  }
+
+  const getDifficultyColor = (difficulty: string) => {
+    switch (difficulty) {
+      case "easy":
+        return "bg-green-100 text-green-800"
+      case "medium":
+        return "bg-yellow-100 text-yellow-800"
+      case "hard":
+        return "bg-red-100 text-red-800"
+      default:
+        return "bg-gray-100 text-gray-800"
+    }
+  }
+
+  // Function to handle resource download and increment download count
+  const handleDownload = async (resource: Resource) => {
+    try {
+      if (!supabase) {
+        toast({
+          title: "Error",
+          description: "Supabase client not initialized",
+          variant: "destructive"
+        })
+        return
+      }
+
+      // Open the file URL in a new tab
+      window.open(resource.fileUrl, '_blank')
+
+      // Increment the download count
+      const { error } = await supabase
+        .from('learning_resources')
+        .update({ download_count: resource.downloads + 1 })
+        .eq('id', resource.id)
+
+      if (error) {
+        console.error("Error updating download count:", error)
+      } else {
+        // Update local state
+        setResources(resources.map(r => 
+          r.id === resource.id ? { ...r, downloads: r.downloads + 1 } : r
+        ))
+      }
+    } catch (error) {
+      console.error("Error in download:", error)
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center h-64">
+        <Loader className="h-8 w-8 animate-spin mb-4" />
+        <p>Loading resources...</p>
+      </div>
+    )
+  }
+
+  // Extract unique subjects, types from real data
+  const subjects = Array.from(new Set(resources.map(r => r.subject)))
+  const types = Array.from(new Set(resources.map(r => r.type)))
+  const difficulties = ["easy", "medium", "hard"]
+
+  return (
+    <div>
+      <div className="mb-8">
+        <h1 className="text-3xl font-bold text-gray-900">Study Resources</h1>
+        <p className="text-gray-600 mt-1">Access curated study materials and resources</p>
+      </div>
+
+      {/* Search and Filters */}
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle>Find Resources</CardTitle>
+          <CardDescription>Search and filter resources by subject, type, and difficulty</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+              <Input
+                placeholder="Search resources..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="pl-10"
+              />
+            </div>
+            <Select value={selectedSubject} onValueChange={setSelectedSubject}>
+              <SelectTrigger>
+                <SelectValue placeholder="All Subjects" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Subjects</SelectItem>
+                {subjects.map((subject) => (
+                  <SelectItem key={subject} value={subject}>
+                    {subject}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={selectedType} onValueChange={setSelectedType}>
+              <SelectTrigger>
+                <SelectValue placeholder="All Types" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Types</SelectItem>
+                {types.map((type) => (
+                  <SelectItem key={type} value={type}>
+                    {type.toUpperCase()}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={selectedDifficulty} onValueChange={setSelectedDifficulty}>
+              <SelectTrigger>
+                <SelectValue placeholder="All Difficulties" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Difficulties</SelectItem>
+                {difficulties.map((difficulty) => (
+                  <SelectItem key={difficulty} value={difficulty}>
+                    {difficulty.charAt(0).toUpperCase() + difficulty.slice(1)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Resource Categories */}
+      {resources.length === 0 && !loading ? (
+        <Card>
+          <CardContent className="flex flex-col items-center justify-center py-12">
+            <FileText className="h-16 w-16 text-gray-300 mb-4" />
+            <p className="text-xl font-medium text-gray-500 mb-2">No resources available</p>
+            <p className="text-gray-400">Check back later for new study materials</p>
+          </CardContent>
+        </Card>
+      ) : (
+        <>
+          <Tabs defaultValue="all" className="w-full">
+            <TabsList className="grid w-full grid-cols-4">
+              <TabsTrigger value="all">All Resources ({filteredResources.length})</TabsTrigger>
+              <TabsTrigger value="pdf">PDFs ({filteredResources.filter((r) => r.type === "pdf").length})</TabsTrigger>
+              <TabsTrigger value="video">Videos ({filteredResources.filter((r) => r.type === "video").length})</TabsTrigger>
+              <TabsTrigger value="document">
+                Documents ({filteredResources.filter((r) => r.type === "document" || r.type === "image").length})
+              </TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="all">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {filteredResources.map((resource) => (
+                  <Card key={resource.id} className="hover:shadow-lg transition-shadow">
+                    <CardHeader>
+                      <div className="flex items-start justify-between">
+                        <div className="flex items-center space-x-2">
+                          {getTypeIcon(resource.type)}
+                          <CardTitle className="text-lg">{resource.title}</CardTitle>
+                        </div>
+                        <div className="flex items-center space-x-1">
+                          <Star className="h-4 w-4 fill-yellow-400 text-yellow-400" />
+                          <span className="text-sm text-gray-600">{resource.rating}</span>
+                        </div>
+                      </div>
+                      <CardDescription>{resource.description}</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="flex flex-wrap gap-2 mb-4">
+                        <Badge className={getSubjectColor(resource.subject)}>{resource.subject}</Badge>
+                        <Badge variant="outline">{resource.type.toUpperCase()}</Badge>
+                        <Badge className={getDifficultyColor(resource.difficulty)}>{resource.difficulty}</Badge>
+                      </div>
+                      <div className="text-sm text-gray-600 mb-4">
+                        <p>By {resource.uploadedBy}</p>
+                        <p>{resource.downloads} downloads</p>
+                      </div>
+                      <Button className="w-full" onClick={() => handleDownload(resource)}>
+                        <Download className="mr-2 h-4 w-4" />
+                        Download Resource
+                      </Button>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            </TabsContent>
+
+            <TabsContent value="pdf">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {filteredResources
+                  .filter((r) => r.type === "pdf")
+                  .map((resource) => (
+                    <Card key={resource.id} className="hover:shadow-lg transition-shadow">
+                      <CardHeader>
+                        <div className="flex items-start justify-between">
+                          <div className="flex items-center space-x-2">
+                            {getTypeIcon(resource.type)}
+                            <CardTitle className="text-lg">{resource.title}</CardTitle>
+                          </div>
+                          <div className="flex items-center space-x-1">
+                            <Star className="h-4 w-4 fill-yellow-400 text-yellow-400" />
+                            <span className="text-sm text-gray-600">{resource.rating}</span>
+                          </div>
+                        </div>
+                        <CardDescription>{resource.description}</CardDescription>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="flex flex-wrap gap-2 mb-4">
+                          <Badge className={getSubjectColor(resource.subject)}>{resource.subject}</Badge>
+                          <Badge variant="outline">{resource.type.toUpperCase()}</Badge>
+                          <Badge className={getDifficultyColor(resource.difficulty)}>{resource.difficulty}</Badge>
+                        </div>
+                        <div className="text-sm text-gray-600 mb-4">
+                          <p>By {resource.uploadedBy}</p>
+                          <p>{resource.downloads} downloads</p>
+                        </div>
+                        <Button className="w-full" onClick={() => handleDownload(resource)}>
+                          <Download className="mr-2 h-4 w-4" />
+                          Download PDF
+                        </Button>
+                      </CardContent>
+                    </Card>
+                  ))}
+              </div>
+            </TabsContent>
+
+            <TabsContent value="video">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {filteredResources
+                  .filter((r) => r.type === "video")
+                  .map((resource) => (
+                    <Card key={resource.id} className="hover:shadow-lg transition-shadow">
+                      <CardHeader>
+                        <div className="flex items-start justify-between">
+                          <div className="flex items-center space-x-2">
+                            {getTypeIcon(resource.type)}
+                            <CardTitle className="text-lg">{resource.title}</CardTitle>
+                          </div>
+                          <div className="flex items-center space-x-1">
+                            <Star className="h-4 w-4 fill-yellow-400 text-yellow-400" />
+                            <span className="text-sm text-gray-600">{resource.rating}</span>
+                          </div>
+                        </div>
+                        <CardDescription>{resource.description}</CardDescription>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="flex flex-wrap gap-2 mb-4">
+                          <Badge className={getSubjectColor(resource.subject)}>{resource.subject}</Badge>
+                          <Badge variant="outline">{resource.type.toUpperCase()}</Badge>
+                          <Badge className={getDifficultyColor(resource.difficulty)}>{resource.difficulty}</Badge>
+                        </div>
+                        <div className="text-sm text-gray-600 mb-4">
+                          <p>By {resource.uploadedBy}</p>
+                          <p>{resource.downloads} downloads</p>
+                        </div>
+                        <Button className="w-full" onClick={() => handleDownload(resource)}>
+                          <Download className="mr-2 h-4 w-4" />
+                          Watch Video
+                        </Button>
+                      </CardContent>
+                    </Card>
+                  ))}
+              </div>
+            </TabsContent>
+
+            <TabsContent value="document">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {filteredResources
+                  .filter((r) => r.type === "document" || r.type === "image")
+                  .map((resource) => (
+                    <Card key={resource.id} className="hover:shadow-lg transition-shadow">
+                      <CardHeader>
+                        <div className="flex items-start justify-between">
+                          <div className="flex items-center space-x-2">
+                            {getTypeIcon(resource.type)}
+                            <CardTitle className="text-lg">{resource.title}</CardTitle>
+                          </div>
+                          <div className="flex items-center space-x-1">
+                            <Star className="h-4 w-4 fill-yellow-400 text-yellow-400" />
+                            <span className="text-sm text-gray-600">{resource.rating}</span>
+                          </div>
+                        </div>
+                        <CardDescription>{resource.description}</CardDescription>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="flex flex-wrap gap-2 mb-4">
+                          <Badge className={getSubjectColor(resource.subject)}>{resource.subject}</Badge>
+                          <Badge variant="outline">{resource.type.toUpperCase()}</Badge>
+                          <Badge className={getDifficultyColor(resource.difficulty)}>{resource.difficulty}</Badge>
+                        </div>
+                        <div className="text-sm text-gray-600 mb-4">
+                          <p>By {resource.uploadedBy}</p>
+                          <p>{resource.downloads} downloads</p>
+                        </div>
+                        <Button className="w-full" onClick={() => handleDownload(resource)}>
+                          <Download className="mr-2 h-4 w-4" />
+                          View Document
+                        </Button>
+                      </CardContent>
+                    </Card>
+                  ))}
+              </div>
+            </TabsContent>
+          </Tabs>
+
+          {filteredResources.length === 0 && (
+            <Card className="mt-6">
+              <CardContent className="text-center py-10">
+                <BookOpen className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+                <p className="text-gray-600">No resources found matching your criteria</p>
+                <p className="text-sm text-gray-500 mt-1">Try adjusting your search or filters</p>
+              </CardContent>
+            </Card>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
