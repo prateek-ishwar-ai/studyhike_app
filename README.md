@@ -251,3 +251,4 @@ This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) 
 **Made with ❤️ for JEE/NEET aspirants** 
 
 Transform your study journey with StudyHike! 🚀
+# studyhike_app
