@@ -1,0 +1,6 @@
+# SPA fallback for Next.js app routes
+/app/* /app/:splat 200
+/auth/* /auth/:splat 200
+
+# Fallback for all other routes to index.html
+/* /index.html 200
