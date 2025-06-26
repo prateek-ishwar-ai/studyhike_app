@@ -1,5 +1,5 @@
-import StaticHomePage from "./static-home"
+import PureStaticHomePage from "./pure-static-home"
 
 export default function HomePage() {
-  return <StaticHomePage />
+  return <PureStaticHomePage />
 }

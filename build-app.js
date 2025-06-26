@@ -16,7 +16,14 @@ const pathsToBackup = [
   { original: path.join(__dirname, 'app', 'mentor'), backup: path.join(__dirname, 'app', '_mentor_backup') },
   { original: path.join(__dirname, 'app', 'admin'), backup: path.join(__dirname, 'app', '_admin_backup') },
   { original: path.join(__dirname, 'app', 'student'), backup: path.join(__dirname, 'app', '_student_backup') },
-  // We'll keep essential routes and exclude complex features for the app version
+  // New problematic routes to backup
+  { original: path.join(__dirname, 'app', 'features'), backup: path.join(__dirname, 'app', '_features_backup') },
+  { original: path.join(__dirname, 'app', 'pricing'), backup: path.join(__dirname, 'app', '_pricing_backup') },
+  { original: path.join(__dirname, 'app', 'testimonials'), backup: path.join(__dirname, 'app', '_testimonials_backup') },
+  { original: path.join(__dirname, 'app', 'debug'), backup: path.join(__dirname, 'app', '_debug_backup') },
+  { original: path.join(__dirname, 'app', 'auth'), backup: path.join(__dirname, 'app', '_auth_backup') },
+  { original: path.join(__dirname, 'app', 'app'), backup: path.join(__dirname, 'app', '_app_backup') },
+  // Keep only the homepage for static export
 ];
 
 const movedPaths = [];
@@ -29,6 +36,22 @@ try {
       fs.renameSync(pathInfo.original, pathInfo.backup);
       movedPaths.push(pathInfo);
     }
+  }
+
+  // Backup layout.tsx and replace with static version
+  const layoutPath = path.join(__dirname, 'app', 'layout.tsx');
+  const staticLayoutPath = path.join(__dirname, 'app', 'static-layout.tsx');
+  
+  if (fs.existsSync(layoutPath)) {
+    console.log('📁 Backing up layout.tsx...');
+    fs.renameSync(layoutPath, layoutPath + '.backup');
+    movedPaths.push({ 
+      original: layoutPath, 
+      backup: layoutPath + '.backup' 
+    });
+    
+    console.log('📁 Using static layout for build...');
+    fs.copyFileSync(staticLayoutPath, layoutPath);
   }
 
   // Copy the app-specific config

@@ -23,7 +23,7 @@ const nextConfig = {
   },
   // Skip problematic routes during static generation
   async generateBuildId() {
-    return 'app-build-' + Date.now();
+    return 'static-build-' + Date.now();
   },
 }
 
