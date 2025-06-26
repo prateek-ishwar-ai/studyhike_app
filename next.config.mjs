@@ -16,7 +16,7 @@ const nextConfig = {
   serverExternalPackages: ['@supabase/supabase-js'],
   env: {
     NEXT_PUBLIC_APP_MODE: 'app',
-    NEXT_PUBLIC_APP_URL: 'https://studyhike-app.netlify.app',
+    NEXT_PUBLIC_APP_URL: 'https://iridescent-sawine-116743.netlify.app',
     // Provide fallback values for missing env vars during build
     NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co',
     NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'placeholder-key',

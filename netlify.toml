@@ -6,7 +6,7 @@
   NODE_VERSION = "18"
   NPM_FLAGS = "--legacy-peer-deps"
   NEXT_PUBLIC_APP_MODE = "app"
-  NEXT_PUBLIC_APP_URL = "https://studyhike-app.netlify.app"
+  NEXT_PUBLIC_APP_URL = "https://iridescent-sawine-116743.netlify.app"
   # Fallback values for build - REPLACE THESE IN NETLIFY DASHBOARD
   NEXT_PUBLIC_SUPABASE_URL = "https://placeholder.supabase.co"
   NEXT_PUBLIC_SUPABASE_ANON_KEY = "placeholder-key"
