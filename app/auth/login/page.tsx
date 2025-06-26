@@ -13,8 +13,25 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { BookOpen, Mail, ArrowRight, Smartphone, Eye, EyeOff, Check } from "lucide-react"
 import { supabase } from "@/lib/supabase/client"
 import { useIsMobile } from "@/hooks/use-mobile"
+import { shouldUsePasswordAuth, isAppDomain } from "@/lib/utils/app-utils"
+import AppLoginPage from "@/components/auth/app-login"
 
 export default function LoginPage() {
+  // Check if this should be the app version
+  const [isAppVersion, setIsAppVersion] = useState(false)
+
+  useEffect(() => {
+    // Detect if we should show app version
+    const useAppVersion = shouldUsePasswordAuth() || isAppDomain()
+    setIsAppVersion(useAppVersion)
+  }, [])
+
+  // If this is the app version, render the app-specific login
+  if (isAppVersion) {
+    return <AppLoginPage />
+  }
+
+  // Otherwise, render the regular website login with magic link support
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [loading, setLoading] = useState(false)

@@ -1,7 +1,7 @@
 "use client"
 
 import type React from "react"
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import Link from "next/link"
 import { useAuth } from "@/contexts/auth-context"
@@ -12,6 +12,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { BookOpen } from "lucide-react"
+import { shouldUsePasswordAuth, isAppDomain } from "@/lib/utils/app-utils"
+import AppSignupPage from "@/components/auth/app-signup"
 
 // Import Supabase client info
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -21,6 +23,21 @@ const hasSupabaseCredentials = !!supabaseUrl && !!supabaseAnonKey
 type UserRole = "student" | "mentor" | "admin"
 
 export default function SignUpPage() {
+  // Check if this should be the app version
+  const [isAppVersion, setIsAppVersion] = useState(false)
+
+  useEffect(() => {
+    // Detect if we should show app version
+    const useAppVersion = shouldUsePasswordAuth() || isAppDomain()
+    setIsAppVersion(useAppVersion)
+  }, [])
+
+  // If this is the app version, render the app-specific signup
+  if (isAppVersion) {
+    return <AppSignupPage />
+  }
+
+  // Otherwise, render the regular website signup
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [fullName, setFullName] = useState("")

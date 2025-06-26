@@ -5,13 +5,16 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "build:app": "node build-app.js",
+    "build:netlify": "npm run build:app",
     "start": "next start",
     "lint": "next lint",
     "setup-db": "node scripts/run-setup.js",
-    "build:mobile": "next build && npx cap sync",
+    "build:mobile": "npm run build:app && npx cap sync",
     "android": "npx cap run android",
     "ios": "npx cap run ios",
-    "sync": "npx cap sync"
+    "sync": "npx cap sync",
+    "netlify:deploy": "netlify deploy --prod --dir=out"
   },
   "dependencies": {
     "@auth/core": "latest",
