@@ -5,8 +5,8 @@ const config: CapacitorConfig = {
   appName: 'StudyHike',
   webDir: 'out',
   server: {
-    // For app version, use the app-specific URL
-    url: 'https://app.studyhike.in',
+    // For app version, use the deployed Netlify URL
+    url: 'https://iridescent-sawine-116743.netlify.app',
     // For development, you can switch back to localhost
     // url: 'http://localhost:3000',
     cleartext: true
