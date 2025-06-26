@@ -23,10 +23,10 @@ import PlanCard from "@/components/plan-card"
 import TerminalText from "@/components/terminal-text"
 import OnboardingForm from "@/components/onboarding-form"
 
-import NewHomePage from "./new-home"
+import SimpleHomePage from "./simple-home"
 
 export default function HomePage() {
-  return <NewHomePage />
+  return <SimpleHomePage />
 }
 
 // Original HomePage function - keeping for reference

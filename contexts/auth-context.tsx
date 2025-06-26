@@ -42,18 +42,22 @@ function getRoleRedirectPath(role: UserRole | undefined): string {
   let detectedRole = role;
   
   if (typeof window !== 'undefined') {
-    // Check for role stored during login or password reset
-    const storedRole = localStorage.getItem('userRole');
-    
-    if (storedRole && ['student', 'mentor', 'admin'].includes(storedRole)) {
-      console.log("Using stored role from localStorage:", storedRole);
-      detectedRole = storedRole as UserRole;
+    try {
+      // Check for role stored during login or password reset
+      const storedRole = localStorage.getItem('userRole');
+      
+      if (storedRole && ['student', 'mentor', 'admin'].includes(storedRole)) {
+        console.log("Using stored role from localStorage:", storedRole);
+        detectedRole = storedRole as UserRole;
+      }
+    } catch (e) {
+      console.warn("Failed to access localStorage:", e);
     }
   }
   
-  if (detectedRole === "student") return "/student/dashboard";
-  if (detectedRole === "mentor") return "/mentor/dashboard";
-  if (detectedRole === "admin") return "/admin/dashboard";
+  if (detectedRole === "student") return "/app/student";
+  if (detectedRole === "mentor") return "/app/mentor";
+  if (detectedRole === "admin") return "/app/admin";
   return "/"; // Default fallback
 }
 
@@ -96,22 +100,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       try {
         setLoading(true);
         
-        // Check for localStorage session first for quicker initialization
-        const storedUser = localStorage.getItem('mark240_user');
-        const storedProfile = localStorage.getItem('mark240_profile');
-        
-        if (storedUser && storedProfile) {
-          try {
-            const parsedUser = JSON.parse(storedUser);
-            const parsedProfile = JSON.parse(storedProfile);
-            
-            // Set initial state from localStorage
-            if (!didCancel) {
-              setUser(parsedUser);
-              setProfile(parsedProfile);
+        // Only access localStorage on client side
+        if (typeof window !== 'undefined') {
+          // Check for localStorage session first for quicker initialization
+          const storedUser = localStorage.getItem('mark240_user');
+          const storedProfile = localStorage.getItem('mark240_profile');
+          
+          if (storedUser && storedProfile) {
+            try {
+              const parsedUser = JSON.parse(storedUser);
+              const parsedProfile = JSON.parse(storedProfile);
+              
+              // Set initial state from localStorage
+              if (!didCancel) {
+                setUser(parsedUser);
+                setProfile(parsedProfile);
+              }
+            } catch (e) {
+              console.warn("Failed to parse stored auth data", e);
             }
-          } catch (e) {
-            console.warn("Failed to parse stored auth data", e);
           }
         }
         
@@ -128,14 +135,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 setSession(newSession);
                 
                 // Store user in localStorage for quicker access
-                localStorage.setItem('mark240_user', JSON.stringify(newSession.user));
+                if (typeof window !== 'undefined') {
+                  localStorage.setItem('mark240_user', JSON.stringify(newSession.user));
+                }
                 
                 // Fetch or create profile
                 const profileData = await fetchUserProfile(newSession.user.id);
                 
                 if (profileData) {
                   setProfile(profileData);
-                  localStorage.setItem('mark240_profile', JSON.stringify(profileData));
+                  if (typeof window !== 'undefined') {
+                    localStorage.setItem('mark240_profile', JSON.stringify(profileData));
+                  }
                 } else {
                   // Create profile from metadata if none exists
                   try {
@@ -151,7 +162,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                       const { error } = await supabase.from("profiles").insert(newProfile);
                       if (!error) {
                         setProfile(newProfile);
-                        localStorage.setItem('mark240_profile', JSON.stringify(newProfile));
+                        if (typeof window !== 'undefined') {
+                          localStorage.setItem('mark240_profile', JSON.stringify(newProfile));
+                        }
                       }
                     }
                   } catch (err) {
@@ -163,8 +176,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               setUser(null);
               setProfile(null);
               setSession(null);
-              localStorage.removeItem('mark240_user');
-              localStorage.removeItem('mark240_profile');
+              if (typeof window !== 'undefined') {
+                localStorage.removeItem('mark240_user');
+                localStorage.removeItem('mark240_profile');
+              }
             }
           });
           
@@ -181,13 +196,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             setUser(data.session.user);
             
             // Store user in localStorage
-            localStorage.setItem('mark240_user', JSON.stringify(data.session.user));
+            if (typeof window !== 'undefined') {
+              localStorage.setItem('mark240_user', JSON.stringify(data.session.user));
+            }
             
             // Fetch profile
             const profileData = await fetchUserProfile(data.session.user.id);
             if (profileData && !didCancel) {
               setProfile(profileData);
-              localStorage.setItem('mark240_profile', JSON.stringify(profileData));
+              if (typeof window !== 'undefined') {
+                localStorage.setItem('mark240_profile', JSON.stringify(profileData));
+              }
             } else if (!didCancel) {
               // If no profile found, attempt to create one from user metadata
               try {
@@ -204,7 +223,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                   const { error } = await supabase.from("profiles").insert(newProfile);
                   if (!error) {
                     setProfile(newProfile);
-                    localStorage.setItem('mark240_profile', JSON.stringify(newProfile));
+                    if (typeof window !== 'undefined') {
+                      localStorage.setItem('mark240_profile', JSON.stringify(newProfile));
+                    }
                   }
                 }
               } catch (err) {
@@ -261,9 +282,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setProfile(mockProfile);
       
       // Create dummy data for demo mentor
-      if (demoUser.role === 'mentor') {
+      if (demoUser.role === 'mentor' && typeof window !== 'undefined') {
         console.log("Setting up demo mentor data");
-        window.localStorage.setItem('demo_mentor_mode', 'true');
+        localStorage.setItem('demo_mentor_mode', 'true');
       }
       
       return { success: true };

@@ -22,15 +22,21 @@ export function ClientLayoutWrapper({ children }: ClientLayoutWrapperProps) {
     
     // Check for performance settings
     if (typeof window !== 'undefined') {
-      // Check if user prefers reduced motion
-      const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-      
-      // Check for performance mode settings
-      const performanceMode = localStorage.getItem('performance_mode')
-      const reducedAnimations = localStorage.getItem('reduced_animations') === 'true'
-      
-      // Disable transitions if any of these conditions are true
-      if (prefersReducedMotion || performanceMode === 'high' || reducedAnimations) {
+      try {
+        // Check if user prefers reduced motion
+        const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+        
+        // Check for performance mode settings
+        const performanceMode = localStorage.getItem('performance_mode')
+        const reducedAnimations = localStorage.getItem('reduced_animations') === 'true'
+        
+        // Disable transitions if any of these conditions are true
+        if (prefersReducedMotion || performanceMode === 'high' || reducedAnimations) {
+          setIsTransitionEnabled(false)
+        }
+      } catch (error) {
+        console.warn("Failed to access browser APIs:", error)
+        // Fallback: disable transitions for safety
         setIsTransitionEnabled(false)
       }
     }

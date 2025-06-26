@@ -57,7 +57,7 @@ if (!supabase) {
           email: credentials.email,
           user_metadata: {
             full_name: credentials.email?.split('@')[0] || 'Demo User',
-            role: localStorage.getItem('userRole') || 'student'
+            role: (typeof window !== 'undefined' && localStorage.getItem('userRole')) || 'student'
           }
         }
         
