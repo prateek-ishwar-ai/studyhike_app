@@ -1,5 +1,5 @@
-import SimpleHomePage from "./simple-home"
+import StaticHomePage from "./static-home"
 
 export default function HomePage() {
-  return <SimpleHomePage />
+  return <StaticHomePage />
 }
