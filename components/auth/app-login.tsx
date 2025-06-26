@@ -142,10 +142,10 @@ export default function AppLoginPage() {
 
         if (data.user) {
           const dashboardPath = role === 'student' 
-            ? '/student/dashboard' 
+            ? '/app/student' 
             : role === 'mentor' 
-              ? '/mentor/dashboard' 
-              : '/admin/dashboard'
+              ? '/app/mentor' 
+              : '/app/admin'
           
           router.push(dashboardPath)
         }
@@ -204,10 +204,10 @@ export default function AppLoginPage() {
 
         // Success - redirect to dashboard
         const dashboardPath = role === 'student' 
-          ? '/student/dashboard' 
+          ? '/app/student' 
           : role === 'mentor' 
-            ? '/mentor/dashboard' 
-            : '/admin/dashboard'
+            ? '/app/mentor' 
+            : '/app/admin'
         
         router.push(dashboardPath)
       }

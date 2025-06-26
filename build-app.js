@@ -10,11 +10,13 @@ console.log('🚀 Building app version for Netlify deployment...');
 process.env.NEXT_PUBLIC_APP_MODE = 'app';
 process.env.BUILD_MODE = 'app';
 
-// Paths to temporarily move
+// Paths to temporarily move (all problematic routes for static export)
 const pathsToBackup = [
   { original: path.join(__dirname, 'app', 'api'), backup: path.join(__dirname, 'app', '_api_backup') },
-  { original: path.join(__dirname, 'app', 'mentor', 'student', '[id]'), backup: path.join(__dirname, 'app', 'mentor', 'student', '_id_backup') },
-  { original: path.join(__dirname, 'app', 'mentor', 'students', '[id]'), backup: path.join(__dirname, 'app', 'mentor', 'students', '_id_backup') }
+  { original: path.join(__dirname, 'app', 'mentor'), backup: path.join(__dirname, 'app', '_mentor_backup') },
+  { original: path.join(__dirname, 'app', 'admin'), backup: path.join(__dirname, 'app', '_admin_backup') },
+  { original: path.join(__dirname, 'app', 'student'), backup: path.join(__dirname, 'app', '_student_backup') },
+  // We'll keep essential routes and exclude complex features for the app version
 ];
 
 const movedPaths = [];
