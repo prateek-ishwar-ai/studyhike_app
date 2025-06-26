@@ -3,7 +3,7 @@
 import type React from "react"
 import { createContext, useContext, useEffect, useState } from "react"
 import type { User, Session } from "@supabase/supabase-js"
-import { supabase, hasSupabaseCredentials } from "@/lib/supabase/client"
+import { supabase, hasRealCredentials } from "@/lib/supabase/safe-client"
 import { useRouter } from "next/navigation"
 
 type UserRole = "student" | "mentor" | "admin"
