@@ -1,27 +1,28 @@
 import { createClient } from "@supabase/supabase-js"
 import { Database } from "@/types/database"
 
-// Get environment variables
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+// Get environment variables with fallbacks for build process
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "https://placeholder.supabase.co"
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "placeholder-key"
 
-// Check if we have the required environment variables
-const hasSupabaseCredentials = !!supabaseUrl && !!supabaseAnonKey
+// Check if we have the required environment variables (excluding placeholders)
+const hasSupabaseCredentials = !!(
+  supabaseUrl && 
+  supabaseAnonKey && 
+  !supabaseUrl.includes('placeholder') && 
+  !supabaseAnonKey.includes('placeholder')
+)
 
 // Create a browser client
 let supabase = null;
 
-// Initialize Supabase client only on the client side
-if (typeof window !== "undefined") {
+// Initialize Supabase client only on the client side and when credentials are available
+if (typeof window !== "undefined" && hasSupabaseCredentials) {
   try {
-    // Force load from .env.local if available
-    const envUrl = supabaseUrl || "https://zegsbfiullzqvswkdkto.supabase.co";
-    const envKey = supabaseAnonKey || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InplZ3NiZml1bGx6cXZzd2tka3RvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDkzMDkxODIsImV4cCI6MjA2NDg4NTE4Mn0._yYo-q_QWLgxixF90iNzjSRf3H4BtvzxeZESIYBYRaQ";
-    
-    console.log("Initializing Supabase client with URL:", envUrl);
+    console.log("Initializing Supabase client with URL:", supabaseUrl);
     
     // Always try to create the client with available credentials
-    supabase = createClient<Database>(envUrl, envKey, {
+    supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
       auth: {
         autoRefreshToken: true,
         persistSession: true,
@@ -129,8 +130,15 @@ if (typeof window !== "undefined") {
       });
   } catch (error) {
     console.error("Error initializing Supabase client:", error);
-    // Create a fallback mock client
-    supabase = {
+    supabase = null;
+  }
+} else if (typeof window !== "undefined") {
+  console.warn("Supabase credentials not available or are placeholders. Using mock client for development.");
+}
+
+// Always create a fallback client for server-side rendering or when credentials are missing
+if (!supabase) {
+  supabase = {
       auth: {
         getUser: async () => ({ data: { user: { id: 'demo-user-' + Date.now() } }, error: null }),
         getSession: async () => ({ data: { session: null }, error: null }),
@@ -166,7 +174,6 @@ if (typeof window !== "undefined") {
       }),
       rpc: () => ({ error: null })
     } as any;
-  }
 }
 
 export { supabase, hasSupabaseCredentials };

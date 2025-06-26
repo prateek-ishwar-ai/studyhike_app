@@ -1,11 +1,14 @@
 [build]
-  command = "npm run build"
+  command = "npm run build:netlify"
   publish = "out"
 
 [build.environment]
   NODE_VERSION = "18"
   NEXT_PUBLIC_APP_MODE = "app"
-  NEXT_PUBLIC_APP_URL = "https://app.studyhike.in"
+  NEXT_PUBLIC_APP_URL = "https://studyhike-app.netlify.app"
+  # Fallback values for build - REPLACE THESE IN NETLIFY DASHBOARD
+  NEXT_PUBLIC_SUPABASE_URL = "https://placeholder.supabase.co"
+  NEXT_PUBLIC_SUPABASE_ANON_KEY = "placeholder-key"
 
 # Redirects for the app
 [[redirects]]

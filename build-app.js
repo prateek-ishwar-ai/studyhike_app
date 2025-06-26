@@ -31,34 +31,16 @@ try {
     }
   }
 
-  // Update next.config.mjs for static export
+  // Copy the app-specific config
   const configPath = path.join(__dirname, 'next.config.mjs');
+  const appConfigPath = path.join(__dirname, 'next.config.app.mjs');
   const originalConfig = fs.readFileSync(configPath, 'utf8');
+  const appConfig = fs.readFileSync(appConfigPath, 'utf8');
   
-  const appConfig = `/** @type {import('next').NextConfig} */
-const nextConfig = {
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
-  typescript: {
-    ignoreBuildErrors: true,
-  },
-  images: {
-    unoptimized: true,
-  },
-  // Static export for app deployment
-  output: 'export',
-  trailingSlash: true,
-  distDir: 'out',
-  serverExternalPackages: ['@supabase/supabase-js'],
-  env: {
-    NEXT_PUBLIC_APP_MODE: 'app',
-    NEXT_PUBLIC_APP_URL: 'https://app.studyhike.in',
-  },
-}
-
-export default nextConfig`;
-
+  // Backup original config
+  fs.writeFileSync(configPath + '.backup', originalConfig);
+  
+  // Use app-specific config
   fs.writeFileSync(configPath, appConfig);
   console.log('⚙️  Updated Next.js config for static export...');
 
@@ -80,5 +62,13 @@ export default nextConfig`;
       console.log(`🔄 Restoring ${path.basename(pathInfo.original)}...`);
       fs.renameSync(pathInfo.backup, pathInfo.original);
     }
+  }
+  
+  // Restore original config
+  const configPath = path.join(__dirname, 'next.config.mjs');
+  const backupConfigPath = configPath + '.backup';
+  if (fs.existsSync(backupConfigPath)) {
+    console.log('🔄 Restoring original Next.js config...');
+    fs.renameSync(backupConfigPath, configPath);
   }
 }
